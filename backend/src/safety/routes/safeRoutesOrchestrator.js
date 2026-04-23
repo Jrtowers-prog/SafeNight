@@ -24,14 +24,16 @@ function createSafeRoutesOrchestrator({
     return `${verbosity}|${capsPart}`;
   }
 
-  function getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng, responsePolicy) {
+  function getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng, responsePolicy, departureHour, allowHazards) {
     const r = (v) => Math.round(v * 1000) / 1000;
     const base = `${r(oLat)},${r(oLng)}->${r(dLat)},${r(dLng)}`;
     const routeKey = wpLat != null && wpLng != null
       ? `${base}@${r(wpLat)},${r(wpLng)}`
       : base;
+    const dhPart = departureHour != null ? `h${departureHour}` : '';
+    const hazardPart = allowHazards ? 'H' : '';
 
-    return `${routeKey}#${getResponsePolicyKey(responsePolicy)}`;
+    return `${routeKey}${dhPart}${hazardPart}#${getResponsePolicyKey(responsePolicy)}`;
   }
 
   function emitInflightProgress(entry, phase, message, pct) {
@@ -64,6 +66,8 @@ function createSafeRoutesOrchestrator({
     maxDistanceKm,
     wpLat,
     wpLng,
+    departureHour = null,
+    allowHazards = false,
     responsePolicy,
     onProgress,
     cancelToken = null,
@@ -77,6 +81,8 @@ function createSafeRoutesOrchestrator({
       wpLat,
       wpLng,
       responsePolicy,
+      departureHour,
+      allowHazards,
     );
     const cached = routeCache.get(cacheKey);
 
@@ -154,6 +160,8 @@ function createSafeRoutesOrchestrator({
             maxDistanceKm,
             wpLat,
             wpLng,
+            departureHour,
+            allowHazards,
             cancelToken,
             (phase, message, pct) =>
               emitInflightProgress(inflightEntry, phase, message, pct),
@@ -233,8 +241,10 @@ function createSafeRoutesOrchestrator({
     wpLat,
     wpLng,
     responsePolicy,
+    departureHour,
+    allowHazards,
   }) {
-    const key = getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng, responsePolicy);
+    const key = getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng, responsePolicy, departureHour, allowHazards);
     return inflight.has(key);
   }
 

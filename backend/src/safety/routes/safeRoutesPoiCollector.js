@@ -4,7 +4,7 @@
  * open places, and crime locations near the route path.
  */
 
-const NEARBY_M = 30;
+const NEARBY_M = 45;
 const DEG_PER_M = 1 / 111320;
 const CELL_DEG = NEARBY_M * DEG_PER_M;
 const MAX_DELTA = NEARBY_M * DEG_PER_M;

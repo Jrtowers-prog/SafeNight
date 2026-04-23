@@ -21,6 +21,18 @@ const EVENING_TYPES = new Set([
   "nightclub",
   "biergarten",
   "casino",
+  "restaurant",
+  "fast_food",
+  "food_court",
+  "ice_cream",
+  "cafe",
+]);
+
+const EXTENDED_SHOP_TYPES = new Set([
+  "convenience",
+  "supermarket",
+  "kiosk",
+  "mall",
 ]);
 
 function stripPH(str) {
@@ -73,10 +85,17 @@ function heuristicOpen(amenityType) {
   if (ALWAYS_OPEN.has(type)) return { open: true, nextChange: "open 24/7" };
 
   if (EVENING_TYPES.has(type)) {
-    if (hour >= 11 && hour < 23) {
+    if (hour >= 10 && hour < 24) {
       return { open: true, nextChange: "closes at 23:00" };
     }
-    return { open: false, nextChange: "opens at 11:00" };
+    return { open: false, nextChange: "opens at 10:00" };
+  }
+
+  if (EXTENDED_SHOP_TYPES.has(type)) {
+    if (hour >= 6 && hour < 23) {
+      return { open: true, nextChange: "closes at 23:00" };
+    }
+    return { open: false, nextChange: "opens at 06:00" };
   }
 
   if (hour >= 7 && hour < 20) return { open: true, nextChange: "closes at 20:00" };

@@ -36,6 +36,12 @@ describe('safeRoutesMetaBuilder', () => {
         cctvCameras: 3,
         places: 1,
         transitStops: 4,
+        freshness: {
+          crimeLastUpdated: null,
+          lightsSource: 'local_osm',
+          coverageRatio: 1,
+          lightVerificationStatus: 'not_needed',
+        },
       },
       timing: {
         totalMs: 456,
@@ -77,6 +83,7 @@ describe('safeRoutesMetaBuilder', () => {
     expect(meta.dataSources).toEqual({
       overpass: { source: 'cache_stale', stale: true },
       crime: { source: 'live', stale: false },
+      os: null,
     });
   });
 });

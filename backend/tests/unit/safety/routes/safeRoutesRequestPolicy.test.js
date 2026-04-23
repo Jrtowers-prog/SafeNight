@@ -39,10 +39,42 @@ describe('safeRoutesRequestPolicy', () => {
     const result = parseRouteRequest(req, 20, () => 1000);
 
     expect(result.value.straightLineKm).toBe(1);
+    expect(result.value.departureHour).toBeNull();
+    expect(result.value.allowHazards).toBe(false);
     expect(result.value.responsePolicy).toEqual({
       verbosity: RESPONSE_VERBOSITY_FULL,
       poiCaps: FULL_MODE_POI_CAPS,
     });
+  });
+
+  test('parseRouteRequest parses departure_hour and allow_hazards', () => {
+    const req = makeReq({
+      origin_lat: 50.37,
+      origin_lng: -4.14,
+      dest_lat: 50.38,
+      dest_lng: -4.13,
+      departure_hour: '2',
+      allow_hazards: 'true',
+    });
+
+    const result = parseRouteRequest(req, 20, () => 1000);
+
+    expect(result.value.departureHour).toBe(2);
+    expect(result.value.allowHazards).toBe(true);
+  });
+
+  test('parseRouteRequest rejects invalid departure_hour', () => {
+    const req = makeReq({
+      origin_lat: 50.37,
+      origin_lng: -4.14,
+      dest_lat: 50.38,
+      dest_lng: -4.13,
+      departure_hour: '25',
+    });
+
+    const result = parseRouteRequest(req, 20, () => 1000);
+
+    expect(result.value.departureHour).toBeNull();
   });
 
   test('parseRouteRequest supports compact response mode and compact defaults', () => {

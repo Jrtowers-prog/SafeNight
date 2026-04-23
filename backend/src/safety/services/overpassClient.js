@@ -896,6 +896,66 @@ async function fetchRoadNetworkOnly(bbox, options = {}) {
   return data;
 }
 
+/**
+ * Fetch only OSM-only safety signals (CCTV, open places, transit).
+ * Lighter query that skips roads and lights — used when OS provides those.
+ */
+async function fetchOsmOnlySafetyData(bbox, options = {}) {
+  const { signal = null, onSourceMeta = null } = options;
+  const { south, west, north, east } = bbox;
+  const b = `${south},${west},${north},${east}`;
+
+  const cctvQuery = `
+    node["man_made"="surveillance"](${b});
+    out body;
+  `;
+
+  const placesQuery = `
+    (
+      node["amenity"](${b});
+      node["shop"](${b});
+      node["leisure"](${b});
+      node["tourism"](${b});
+      way["amenity"](${b});
+      way["shop"](${b});
+    );
+    out center;
+  `;
+
+  const transitQuery = `
+    (
+      node["highway"="bus_stop"](${b});
+      node["public_transport"="stop_position"](${b});
+      node["public_transport"="platform"](${b});
+    );
+    out body;
+  `;
+
+  const [cctv, places, transit] = await Promise.all([
+    overpassQuery(cctvQuery, 30, signal).catch((err) => {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(`[overpass] OSM-only CCTV failed: ${err.message}`);
+      return { elements: [] };
+    }),
+    overpassQuery(placesQuery, 30, signal).catch((err) => {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(`[overpass] OSM-only places failed: ${err.message}`);
+      return { elements: [] };
+    }),
+    overpassQuery(transitQuery, 30, signal).catch((err) => {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(`[overpass] OSM-only transit failed: ${err.message}`);
+      return { elements: [] };
+    }),
+  ]);
+
+  if (typeof onSourceMeta === 'function') {
+    onSourceMeta({ source: 'live', stale: false, osmOnly: true });
+  }
+
+  return { cctv, places, transit };
+}
+
 // Legacy individual fetchers (kept for backwards compat)
 async function fetchRoadNetwork(bbox) {
   return (await fetchAllSafetyData(bbox)).roads;
@@ -934,6 +994,7 @@ module.exports = {
   overpassQuery,
   fetchAllSafetyData,
   fetchRoadNetworkOnly,
+  fetchOsmOnlySafetyData,
   fetchRoadNetwork,
   fetchLighting,
   fetchOpenPlaces,

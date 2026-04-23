@@ -10,6 +10,9 @@ const {
   routeToPolyline,
   routeSafetyBreakdown,
 } = require("../services/safetyGraph");
+const {
+  buildRouteLightGapSpans,
+} = require("../services/lightConfidenceEngine");
 
 const WALKING_SPEED_MPS = 1.35;
 const DEFAULT_RESPONSE_POLICY = {
@@ -77,6 +80,151 @@ function limitRoutePois(routePOIs, poiCaps, oLat, oLng) {
   };
 }
 
+function applyLightingOverride(label, color, score100, lightingPct) {
+  if (!Number.isFinite(lightingPct)) {
+    return { label, color };
+  }
+
+  if (lightingPct <= 20 && score100 >= 55) {
+    return { label: "Use Caution", color: "#C62828" };
+  }
+
+  if (lightingPct <= 35 && score100 >= 75) {
+    return { label: "Moderate", color: "#F9A825" };
+  }
+
+  return { label, color };
+}
+
+function buildUncertaintyBoxes(route, edges, osmNodes, edgeConfidences) {
+  const boxes = [];
+  const bufferDeg = 30 / 111320;
+  for (const edgeIdx of route.edges || []) {
+    const conf = edgeConfidences?.[edgeIdx];
+    if (!conf?.needsVerification) continue;
+    const edge = edges?.[edgeIdx];
+    if (!edge) continue;
+    const from = osmNodes.get(edge.from);
+    const to = osmNodes.get(edge.to);
+    if (!from || !to) continue;
+    boxes.push({
+      south: Math.min(from.lat, to.lat) - bufferDeg,
+      west: Math.min(from.lng, to.lng) - bufferDeg,
+      north: Math.max(from.lat, to.lat) + bufferDeg,
+      east: Math.max(from.lng, to.lng) + bufferDeg,
+    });
+  }
+  return boxes;
+}
+
+function buildLightUncertaintySpans(route, edges, osmNodes, edgeConfidences) {
+  return buildRouteLightGapSpans(route, edges, osmNodes, edgeConfidences, {
+    lowThreshold: 0.58,
+    continueThreshold: 0.72,
+    minSpanDistance: 90,
+  }).map((span) => {
+    const startNode = osmNodes.get(span.startNodeId);
+    const endNode = osmNodes.get(span.endNodeId);
+    if (!startNode || !endNode) return null;
+
+    return {
+      start: { lat: startNode.lat, lng: startNode.lng },
+      end: { lat: endNode.lat, lng: endNode.lng },
+      edgeCount: span.edgeCount,
+      distance: span.distance,
+      reason: span.reason === 'explicit_dark_span' ? 'explicit_dark' : 'light_uncertain',
+      confidence: span.confidence,
+    };
+  }).filter(Boolean);
+}
+
+function buildGeneralUncertaintyBoxes(route, edges, osmNodes, edgeConfidences) {
+  const boxes = [];
+  const routeEdges = route.edges || [];
+  const sparseHighways = new Set(['footway', 'path', 'steps', 'track', 'cycleway']);
+  let current = null;
+
+  const isSparseContext = (edge) => {
+    if (!edge) return false;
+    const nearbyContext = (edge.nearbyTransitCount || 0) + (edge.nearbyCctvCount || 0);
+    const placeScore = Number(edge.placeScore || 0);
+    const trafficScore = Number(edge.trafficScore || 0);
+    const roadName = String(edge.roadName || '');
+    return (
+      nearbyContext === 0 &&
+      placeScore < 0.15 &&
+      trafficScore < 0.35 &&
+      sparseHighways.has(edge.highway) &&
+      roadName.length === 0
+    );
+  };
+
+  const flush = () => {
+    if (!current) return;
+    if (!Number.isFinite(current.minLat)) {
+      current = null;
+      return;
+    }
+    const bufferDeg = 30 / 111320;
+    boxes.push({
+      south: current.minLat - bufferDeg,
+      west: current.minLng - bufferDeg,
+      north: current.maxLat + bufferDeg,
+      east: current.maxLng + bufferDeg,
+      reason: 'sparse_context',
+      edgeCount: current.edgeCount,
+      distance: Math.round(current.distance),
+      confidence: Math.round((current.confidence ?? 0) * 100) / 100,
+    });
+    current = null;
+  };
+
+  for (const edgeIdx of routeEdges) {
+    const conf = edgeConfidences?.[edgeIdx];
+    const edge = edges?.[edgeIdx];
+    if (!edge || !conf) {
+      flush();
+      continue;
+    }
+
+    const isLightIssue = conf.needsVerification || conf.reason === 'explicit_lit_no';
+    if (isLightIssue || !isSparseContext(edge)) {
+      flush();
+      continue;
+    }
+
+    const from = osmNodes.get(edge.from);
+    const to = osmNodes.get(edge.to);
+    if (!from || !to) {
+      flush();
+      continue;
+    }
+
+    if (!current) {
+      current = {
+        minLat: Infinity,
+        minLng: Infinity,
+        maxLat: -Infinity,
+        maxLng: -Infinity,
+        edgeCount: 0,
+        distance: 0,
+        confidence: 1,
+      };
+    }
+
+    current.minLat = Math.min(current.minLat, from.lat, to.lat);
+    current.minLng = Math.min(current.minLng, from.lng, to.lng);
+    current.maxLat = Math.max(current.maxLat, from.lat, to.lat);
+    current.maxLng = Math.max(current.maxLng, from.lng, to.lng);
+    current.edgeCount += 1;
+    current.distance += edge.distance || 0;
+    current.confidence = Math.min(current.confidence, Number.isFinite(conf.score) ? conf.score : 1);
+  }
+
+  flush();
+  return boxes;
+}
+
 function buildCompactRoutePayload({
   route,
   idx,
@@ -87,6 +235,10 @@ function buildCompactRoutePayload({
   routeStats,
   limitedRoutePOIs,
   durationSec,
+  queryFootprints,
+  uncertaintyBoxes,
+  lightUncertaintySpans,
+  generalUncertaintyBoxes,
 }) {
   return {
     routeIndex: idx,
@@ -117,6 +269,10 @@ function buildCompactRoutePayload({
       estimatedDurationSec: durationSec,
     },
     routePOIs: limitedRoutePOIs,
+    queryFootprints,
+    lightUncertaintySpans,
+    generalUncertaintyBoxes,
+    uncertaintyBoxes,
   };
 }
 
@@ -203,6 +359,9 @@ function buildRouteResponses({
   dLng,
   enableOpeningHoursParse,
   responsePolicy,
+  edgeConfidences = null,
+  straightLineDist = 0,
+  verificationFootprints = [],
 }) {
   const normalizedResponsePolicy = normalizeResponsePolicy(responsePolicy);
   const lightNodes = collectLightNodes(allData?.lights?.elements);
@@ -213,10 +372,18 @@ function buildRouteResponses({
 
   const routes = rawRoutes.map((route, idx) => {
     const polyline = routeToPolyline(osmNodes, route.path);
-    const breakdown = routeSafetyBreakdown(edges, route.edges, weights);
+    const breakdown = routeSafetyBreakdown(edges, route.edges, weights, edgeConfidences);
     const score100 = Math.round(breakdown.overall * 100);
-    const { label, color } = safetyLabel(score100);
+    const lightingPct = Math.round((breakdown.lighting || 0) * 100);
+    const baseLabel = safetyLabel(score100);
+    const { label, color } = applyLightingOverride(
+      baseLabel.label,
+      baseLabel.color,
+      score100,
+      lightingPct,
+    );
     const durationSec = Math.round(route.totalDist / WALKING_SPEED_MPS);
+    const detourRatio = straightLineDist > 0 ? route.totalDist / straightLineDist : 0;
 
     const segments = [];
     let deadEndCount = 0;
@@ -251,11 +418,17 @@ function buildRouteResponses({
       }
       cumulativeDist += edge.distance;
 
+      const edgeColor = edge.lightScore <= 0.2
+        ? "#C62828"
+        : edge.lightScore <= 0.35
+          ? "#F9A825"
+          : segmentColor(edge.safetyScore);
+
       segments.push({
         start: { lat: nodeA.lat, lng: nodeA.lng },
         end: { lat: nodeB.lat, lng: nodeB.lng },
         safetyScore: edge.safetyScore,
-        color: segmentColor(edge.safetyScore),
+        color: edgeColor,
         highway: edge.highway,
         roadName: edge.roadName,
         isDeadEnd: edge.isDeadEnd,
@@ -285,6 +458,24 @@ function buildRouteResponses({
       normalizedResponsePolicy.poiCaps,
       oLat,
       oLng,
+    );
+    const uncertaintyBoxes = buildUncertaintyBoxes(
+      route,
+      edges,
+      osmNodes,
+      edgeConfidences,
+    );
+    const lightUncertaintySpans = buildLightUncertaintySpans(
+      route,
+      edges,
+      osmNodes,
+      edgeConfidences,
+    );
+    const generalUncertaintyBoxes = buildGeneralUncertaintyBoxes(
+      route,
+      edges,
+      osmNodes,
+      edgeConfidences,
     );
 
     const routeStats = {
@@ -342,10 +533,26 @@ function buildRouteResponses({
         },
         roadTypes: breakdown.roadTypes,
         mainRoadRatio: Math.round(breakdown.mainRoadRatio * 100),
+        riskVector: breakdown.riskVector
+          ? {
+              mean: Math.round(breakdown.riskVector.mean * 100) / 100,
+              p95: Math.round(breakdown.riskVector.p95 * 100) / 100,
+              max: Math.round(breakdown.riskVector.max * 100) / 100,
+              uncertainty: Math.round(breakdown.riskVector.uncertainty * 100) / 100,
+              detourRatio: Math.round(detourRatio * 100) / 100,
+            }
+          : null,
+        caution: breakdown.riskVector && breakdown.riskVector.max < 0.2 && breakdown.riskVector.uncertainty > 0.15
+          ? 'Includes unverified or high-risk segments'
+          : null,
       },
       segments,
       routeStats,
       routePOIs: limitedRoutePOIs,
+      queryFootprints: verificationFootprints,
+      lightUncertaintySpans,
+      generalUncertaintyBoxes,
+      uncertaintyBoxes,
     };
 
     if (normalizedResponsePolicy.verbosity === "compact") {
@@ -359,6 +566,10 @@ function buildRouteResponses({
         routeStats,
         limitedRoutePOIs,
         durationSec,
+        queryFootprints: verificationFootprints,
+        lightUncertaintySpans,
+        generalUncertaintyBoxes,
+        uncertaintyBoxes,
       });
     }
 

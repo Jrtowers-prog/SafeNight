@@ -117,6 +117,16 @@ function parseRouteRequest(req, defaultMaxDistanceKm, haversine) {
     ? Math.min(Number(req.query.max_distance), defaultMaxDistanceKm)
     : defaultMaxDistanceKm;
 
+  let departureHour = null;
+  if (req.query.departure_hour != null) {
+    const dh = Number(req.query.departure_hour);
+    if (Number.isFinite(dh) && dh >= 0 && dh <= 23) {
+      departureHour = Math.floor(dh);
+    }
+  }
+
+  const allowHazards = req.query.allow_hazards === 'true' || req.query.allow_hazards === '1';
+
   return {
     ok: true,
     value: {
@@ -129,6 +139,8 @@ function parseRouteRequest(req, defaultMaxDistanceKm, haversine) {
       straightLineDist,
       straightLineKm,
       maxDistanceKm,
+      departureHour,
+      allowHazards,
       responsePolicy: parseResponsePolicy(req.query),
     },
   };

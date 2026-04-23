@@ -1,5 +1,4 @@
 /* eslint-env jest */
-/* global jest, describe, test, expect, afterEach */
 
 jest.mock('../../../../src/safety/routes/safeRoutesUtils', () => ({
   checkOpenNow: jest.fn(() => ({ open: true, nextChange: 'closes at 22:00' })),
@@ -143,18 +142,21 @@ describe('safeRoutesResponseFormatter', () => {
     const responseRoutes = buildRouteResponses({
       rawRoutes: [
         {
-          path: ['n1', 'n2'],
-          edges: [0],
-          totalDist: 1000,
+          path: ['n1', 'n2', 'n3'],
+          edges: [0, 1],
+          totalDist: 1400,
         },
       ],
       osmNodes: new Map([
         ['n1', { lat: 50.37, lng: -4.14 }],
         ['n2', { lat: 50.38, lng: -4.13 }],
+        ['n3', { lat: 50.38, lng: -4.13 }],
       ]),
       edges: [
         {
-          distance: 1000,
+          from: 'n1',
+          to: 'n2',
+          distance: 700,
           safetyScore: 0.6,
           highway: 'residential',
           roadName: 'Main St',
@@ -169,6 +171,25 @@ describe('safeRoutesResponseFormatter', () => {
           trafficScore: 0.5,
           nearbyTransitCount: 2,
           nearbyCctvCount: 1,
+        },
+        {
+          from: 'n2',
+          to: 'n3',
+          distance: 700,
+          safetyScore: 0.45,
+          highway: 'path',
+          roadName: '',
+          isDeadEnd: false,
+          hasSidewalk: false,
+          surfacePenalty: 0,
+          surfaceType: 'gravel',
+          lightScore: 0.1,
+          crimeScore: 0.9,
+          cctvScore: 0.0,
+          placeScore: 0.05,
+          trafficScore: 0.1,
+          nearbyTransitCount: 0,
+          nearbyCctvCount: 0,
         },
       ],
       weights: {},
@@ -185,6 +206,10 @@ describe('safeRoutesResponseFormatter', () => {
       dLat: 50.38,
       dLng: -4.13,
       enableOpeningHoursParse: false,
+      edgeConfidences: [
+        { score: 0, reason: 'explicit_lit_no', needsVerification: true },
+        { score: 0.35, reason: 'uncertain', needsVerification: false },
+      ],
     });
 
     expect(responseRoutes).toHaveLength(1);
@@ -200,10 +225,12 @@ describe('safeRoutesResponseFormatter', () => {
       },
       routeStats: {
         deadEnds: 0,
-        sidewalkPct: 100,
+        sidewalkPct: 50,
       },
     });
-    expect(responseRoutes[0].segments).toHaveLength(1);
+    expect(responseRoutes[0].segments).toHaveLength(2);
+    expect(responseRoutes[0].lightUncertaintySpans).toHaveLength(1);
+    expect(responseRoutes[0].generalUncertaintyBoxes).toHaveLength(1);
   });
 
   test('buildRouteResponses in compact mode excludes heavy fields', () => {

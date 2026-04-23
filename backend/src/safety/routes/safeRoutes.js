@@ -26,12 +26,22 @@ const express = require("express");
 const {
   haversine,
   bboxFromPoints,
+  buildSpatialGrid,
 } = require("../services/geo");
 const {
   fetchAllSafetyData,
-  fetchRoadNetworkOnly,
 } = require("../services/overpassClient");
 const { fetchCrimesInBbox } = require("../services/crimeClient");
+const {
+  fetchRoadNetwork: fetchLocalOsmRoadNetwork,
+  fetchSafetyData: fetchLocalOsmSafetyData,
+} = require("../services/sourceFusionEngine");
+const {
+  recordRouteLatency,
+  recordSourceDecision,
+  recordLightVerification,
+  recordOsNgdGapFill,
+} = require("../services/osMetrics");
 const {
   createCancellationToken,
   logSearchCancellation,
@@ -59,6 +69,14 @@ const {
   findNearestNode,
   findKSafestRoutes,
 } = require("../services/safetyGraph");
+const {
+  computeSampledLightConfidence,
+  mergeVerifiedLights,
+  calculateRouteUncertainty,
+  buildRouteLightGapSpans,
+  CONFIDENCE_THRESHOLDS,
+} = require("../services/lightConfidenceEngine");
+const { verifyLightGaps } = require("../services/osNgdMicroQuery");
 
 const router = express.Router();
 
@@ -150,6 +168,8 @@ router.get("/", async (req, res) => {
       straightLineDist,
       straightLineKm,
       maxDistanceKm,
+      departureHour,
+      allowHazards,
       responsePolicy,
     } = parsedRequest.value;
 
@@ -177,6 +197,8 @@ router.get("/", async (req, res) => {
       maxDistanceKm,
       wpLat,
       wpLng,
+      departureHour,
+      allowHazards,
       responsePolicy,
       cancelToken,
     });
@@ -194,6 +216,17 @@ router.get("/", async (req, res) => {
       if (!res.headersSent) {
         return sendJson(409, {
           error: "SEARCH_CANCELLED",
+          message: err.message,
+        });
+      }
+      return;
+    }
+
+    if (err.code === 'OS_CAP_EXCEEDED' || err.name === 'OsCapExceededError') {
+      console.error(`[safe-routes] 🚫 OS cap exceeded — returning maintenance message`);
+      if (!res.headersSent) {
+        return sendJson(503, {
+          error: "SERVICE_UNAVAILABLE",
           message: err.message,
         });
       }
@@ -453,6 +486,8 @@ async function computeSafeRoutes(
   maxDistanceKm = DEFAULT_MAX_DISTANCE_KM,
   wpLat = null,
   wpLng = null,
+  departureHour = null,
+  allowHazards = false,
   cancelToken = null,
   onProgress = null,
   responsePolicy = null,
@@ -511,8 +546,9 @@ async function computeSafeRoutes(
       const initialBbox = bboxFromPoints(initialBboxPoints, initialBufferM);
 
       try {
-        const roadData = await fetchRoadNetworkOnly(initialBbox, {
+        const roadData = await fetchLocalOsmRoadNetwork(initialBbox, {
           signal: upstreamAbortController.signal,
+          routeKey: `${oLatV},${oLngV}->${dLatV},${dLngV}`,
         });
         distGraph = buildDistanceOnlyGraph(roadData);
 
@@ -622,23 +658,54 @@ async function computeSafeRoutes(
     const t0 = Date.now();
 
     const dataSources = {
+      localOsm: null,
       overpass: null,
       crime: null,
     };
-    let [allData, crimes] = await Promise.all([
-      fetchAllSafetyData(bbox, {
-        signal: upstreamAbortController.signal,
-        onSourceMeta: (meta) => {
-          dataSources.overpass = meta;
-        },
-      }),
-      fetchCrimesInBbox(bbox, {
-        signal: upstreamAbortController.signal,
-        onSourceMeta: (meta) => {
-          dataSources.crime = meta;
-        },
-      }),
-    ]);
+    let allData;
+    let crimes;
+    try {
+      [allData, crimes] = await Promise.all([
+        fetchLocalOsmSafetyData(bbox, {
+          signal: upstreamAbortController.signal,
+          routeKey: `${oLatV},${oLngV}->${dLatV},${dLngV}`,
+          onSourceMeta: (meta) => {
+            dataSources.localOsm = meta;
+          },
+        }),
+        fetchCrimesInBbox(bbox, {
+          signal: upstreamAbortController.signal,
+          onSourceMeta: (meta) => {
+            dataSources.crime = meta;
+          },
+        }),
+      ]);
+      if (allData._sourceMeta) {
+        recordSourceDecision(allData._sourceMeta.roads?.source || 'osm');
+      }
+    } catch (err) {
+      // Re-throw cap exceeded errors — they should not fall back
+      if (err.code === 'OS_CAP_EXCEEDED' || err.name === 'OsCapExceededError') {
+        throw err;
+      }
+      // Local OSM failed — fallback to Overpass
+      console.warn(`[safe-routes] Local OSM safety data failed, falling back to Overpass: ${err.message}`);
+      [allData, crimes] = await Promise.all([
+        fetchAllSafetyData(bbox, {
+          signal: upstreamAbortController.signal,
+          onSourceMeta: (meta) => {
+            dataSources.overpass = meta;
+          },
+        }),
+        fetchCrimesInBbox(bbox, {
+          signal: upstreamAbortController.signal,
+          onSourceMeta: (meta) => {
+            dataSources.crime = meta;
+          },
+        }),
+      ]);
+      recordSourceDecision('osm_fallback');
+    }
 
     let dataTime = Date.now() - t0;
     cancelToken?.throwIfCancelled?.();
@@ -657,10 +724,95 @@ async function computeSafeRoutes(
 
     // ── 6b. Extract light & place node positions for POI markers ────────
     // ── 7. Build safety-weighted graph (with coverage maps) ─────────────
-    debugLog(`[safe-routes] 🏗️  Building graph + coverage maps...`);
-    cancelToken?.throwIfCancelled?.();
-    progress("graph_build", "Building safety graph…", 74);
-    const t1 = Date.now();
+    const computeGraphAndCandidates = async (dataset) => {
+      debugLog(`[safe-routes] 🏗️  Building graph + coverage maps...`);
+      cancelToken?.throwIfCancelled?.();
+      progress("graph_build", "Building safety graph…", 74);
+      const t1 = Date.now();
+      const graph = await buildGraph(
+        dataset.roads,
+        dataset.lights,
+        dataset.cctv,
+        dataset.places,
+        dataset.transit,
+        crimes,
+        bbox,
+        {
+          shouldCancel: () => cancelToken?.isCancelled?.() === true,
+          hour: departureHour,
+          lightsCacheByEdgeIdx: dataset.lightsCacheByEdgeIdx || null,
+        },
+      );
+      const graphTime = Date.now() - t1;
+      cancelToken?.throwIfCancelled?.();
+      progress("graph_ready", "Running safest path search…", 82);
+      debugLog(
+        `[safe-routes] 📊 Graph: ${graph.osmNodes.size} nodes, ${graph.edges.length} edges (built in ${graphTime}ms)`,
+      );
+
+      if (graph.edges.length === 0) {
+        throw Object.assign(
+          new Error(
+            "We found roads in this area but none of them are walkable (they may all be motorways or private roads). Try a destination in a more pedestrian-friendly area.",
+          ),
+          { statusCode: 404, code: "NO_WALKING_NETWORK", roadCount },
+        );
+      }
+
+      const startNode = findNearestNode(graph.nodeGrid, graph.adjacency, oLatV, oLngV);
+      const endNode = findNearestNode(graph.nodeGrid, graph.adjacency, dLatV, dLngV);
+
+      if (!startNode || !endNode) {
+        const which = !startNode ? "origin" : "destination";
+        throw Object.assign(
+          new Error(
+            `We couldn't find a walkable road within 200 m of your ${which}. ` +
+              `This can happen if the point is in the middle of a park, body of water, or private land. ` +
+              `Try tapping a spot closer to a street or footpath.`,
+          ),
+          { statusCode: 404, code: "NO_NEARBY_ROAD", which },
+        );
+      }
+
+      debugLog(
+        `[safe-routes] 🔎 A* pathfinding (start=${startNode}, end=${endNode})...`,
+      );
+      cancelToken?.throwIfCancelled?.();
+      progress("pathfind", "Computing route candidates…", 86);
+      const t2 = Date.now();
+      const maxRouteDist = straightLineDist * 2.5;
+      const rawRoutes = findRouteCandidates({
+        wpLat,
+        wpLng,
+        nodeGrid: graph.nodeGrid,
+        adjacency: graph.adjacency,
+        startNode,
+        endNode,
+        osmNodes: graph.osmNodes,
+        edges: graph.edges,
+        maxRouteDist,
+        findNearestNode,
+        findKSafestRoutes,
+        logger: debugLogger,
+        allowHazards,
+        edgeConfidences: graph.edgeConfidences,
+      });
+
+      const pathfindTime = Date.now() - t2;
+      cancelToken?.throwIfCancelled?.();
+      progress("pathfind_done", "Scoring and formatting route options…", 89);
+      debugLog(
+        `[safe-routes] 🔎 A* found ${rawRoutes.length} routes in ${pathfindTime}ms`,
+      );
+
+      return {
+        ...graph,
+        rawRoutes,
+        graphTime,
+        pathfindTime,
+      };
+    };
+
     let {
       osmNodes,
       edges,
@@ -670,77 +822,210 @@ async function computeSafeRoutes(
       cctvNodes,
       transitNodes,
       nodeDegree,
-    } = buildGraph(
-      allData.roads,
-      allData.lights,
-      allData.cctv,
-      allData.places,
-      allData.transit,
-      crimes,
-      bbox,
-      { shouldCancel: () => cancelToken?.isCancelled?.() === true },
-    );
-    let graphTime = Date.now() - t1;
-    cancelToken?.throwIfCancelled?.();
-    progress("graph_ready", "Running safest path search…", 82);
-    debugLog(
-      `[safe-routes] 📊 Graph: ${osmNodes.size} nodes, ${edges.length} edges (built in ${graphTime}ms)`,
-    );
+      rawRoutes,
+      graphTime,
+      pathfindTime,
+    } = await computeGraphAndCandidates(allData);
 
-    if (edges.length === 0) {
-      throw Object.assign(
-        new Error(
-          "We found roads in this area but none of them are walkable (they may all be motorways or private roads). Try a destination in a more pedestrian-friendly area.",
-        ),
-        { statusCode: 404, code: "NO_WALKING_NETWORK", roadCount },
+    // ── Light confidence scoring & OS NGD gap verification ──────────────
+    let edgeConfidences = [];
+    let verifiedLights = [];
+    let verificationFootprints = [];
+    let lightVerificationStatus = 'not_needed';
+
+    if (rawRoutes.length > 0) {
+      const computeEdgeConfidencesForCurrentGraph = () => {
+        const lightNodes = [];
+        for (const el of allData.lights.elements) {
+          if (el.type === 'node' && el.lat && el.lon) {
+            lightNodes.push({ lat: el.lat, lng: el.lon });
+          }
+        }
+        const lightGrid = buildSpatialGrid(lightNodes, 'lat', 'lng', 0.0003); // ~33m cells
+
+        return edges.map((edge) => {
+          const nA = osmNodes.get(edge.from);
+          const nB = osmNodes.get(edge.to);
+          if (!nA || !nB) return { score: 0, reason: 'missing_nodes', needsVerification: false };
+          return computeSampledLightConfidence(
+            { tags: { highway: edge.highway, lit: edge.litTag || undefined } },
+            edge,
+            osmNodes,
+            lightGrid,
+            [], // adjacent ways would need graph traversal; skip for now
+            { searchRadiusMetres: 50, sampleFractions: [0.25, 0.5, 0.75] },
+          );
+        });
+      };
+
+      const shouldVerifyEdge = (conf) => {
+        if (!conf) return false;
+        if (conf.needsVerification) return true;
+        if (conf.reason === 'explicit_lit_no') return true;
+        return Number.isFinite(conf.score) && conf.score <= CONFIDENCE_THRESHOLDS.UNLIT;
+      };
+
+      edgeConfidences = computeEdgeConfidencesForCurrentGraph();
+
+      // Check all candidate routes for uncertain or explicitly dark segments.
+      const verificationCandidates = new Map();
+      let explicitDarkRouteCount = 0;
+      let inferredDarkRouteCount = 0;
+      for (const route of rawRoutes) {
+        const uncertainty = calculateRouteUncertainty(route.edges, edges, edgeConfidences);
+        const lightGapSpans = buildRouteLightGapSpans(route, edges, osmNodes, edgeConfidences, {
+          lowThreshold: 0.58,
+          continueThreshold: 0.72,
+          minSpanDistance: 90,
+        });
+        const hasExplicitDarkSegment = route.edges.some(
+          (edgeIdx) => edgeConfidences[edgeIdx]?.reason === 'explicit_lit_no',
+        );
+        const hasInferredDarkSegment = route.edges.some((edgeIdx) => {
+          const conf = edgeConfidences[edgeIdx];
+          return conf && conf.reason !== 'explicit_lit_no' && Number.isFinite(conf.score) && conf.score <= CONFIDENCE_THRESHOLDS.UNLIT;
+        });
+        if (hasExplicitDarkSegment) {
+          explicitDarkRouteCount += 1;
+        }
+        if (hasInferredDarkSegment) {
+          inferredDarkRouteCount += 1;
+        }
+        if (lightGapSpans.length > 0) {
+          for (const span of lightGapSpans) {
+            const key = `span:${span.edgeIdxs[0]}:${span.edgeIdxs[span.edgeIdxs.length - 1]}`;
+            if (!verificationCandidates.has(key)) {
+              verificationCandidates.set(key, {
+                edgeIdx: span.edgeIdx,
+                edge: edges[span.edgeIdx],
+                edgeIdxs: span.edgeIdxs,
+                bbox: span.bbox,
+                confidence: span.confidence,
+                reason: span.reason,
+                routeKey: `${oLatV},${oLngV}->${dLatV},${dLngV}`,
+                spanDistance: span.distance,
+              });
+            }
+          }
+        } else if (uncertainty.uncertainRatio > 0.15 || hasExplicitDarkSegment || hasInferredDarkSegment) {
+          for (const eIdx of route.edges) {
+            if (shouldVerifyEdge(edgeConfidences[eIdx])) {
+              const key = `edge:${eIdx}`;
+              if (!verificationCandidates.has(key)) {
+                verificationCandidates.set(key, {
+                  edgeIdx: eIdx,
+                  edge: edges[eIdx],
+                  confidence: edgeConfidences[eIdx]?.score ?? 0,
+                  reason: edgeConfidences[eIdx]?.reason || 'unknown',
+                  routeKey: `${oLatV},${oLngV}->${dLatV},${dLngV}`,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      const candidateVerifyCount = edgeConfidences.reduce(
+        (count, conf) => count + (shouldVerifyEdge(conf) ? 1 : 0),
+        0,
       );
-    }
-
-    // ── 8. Find nearest graph nodes (O(1) via spatial grid) ─────────────
-    let startNode = findNearestNode(nodeGrid, adjacency, oLatV, oLngV);
-    let endNode = findNearestNode(nodeGrid, adjacency, dLatV, dLngV);
-
-    if (!startNode || !endNode) {
-      const which = !startNode ? "origin" : "destination";
-      throw Object.assign(
-        new Error(
-          `We couldn't find a walkable road within 200 m of your ${which}. ` +
-            `This can happen if the point is in the middle of a park, body of water, or private land. ` +
-            `Try tapping a spot closer to a street or footpath.`,
-        ),
-        { statusCode: 404, code: "NO_NEARBY_ROAD", which },
+      debugLog(
+        `[safe-routes] 💡 Light verification gate: routes=${rawRoutes.length}, explicitDarkRoutes=${explicitDarkRouteCount}, inferredDarkRoutes=${inferredDarkRouteCount}, candidateEdges=${candidateVerifyCount}, routedCandidates=${verificationCandidates.size}`,
       );
+
+      if (verificationCandidates.size > 0) {
+        lightVerificationStatus = 'in_progress';
+        progress("light_verify", "Verifying street lighting data…", 90);
+
+        const uncertainSegments = [...verificationCandidates.values()]
+          .filter((seg) => !!seg.edge);
+
+        debugLog(
+          `[safe-routes] 💡 Verifying ${uncertainSegments.length} candidate light segments via OS NGD...`,
+        );
+
+        recordLightVerification(uncertainSegments.length, 0);
+
+        try {
+          const verification = await verifyLightGaps(
+            uncertainSegments,
+            osmNodes,
+            { signal: upstreamAbortController.signal, routeKey: `${oLatV},${oLngV}->${dLatV},${dLngV}` },
+          );
+
+          verifiedLights = verification.verifiedLights;
+          verificationFootprints = verification.queryFootprints || [];
+          const verifiedDarkCacheByEdgeIdx = new Map();
+          for (const [edgeIdx, verified] of verification.verifiedSegments.entries()) {
+            if (verified?.lit_status !== 'unlit') continue;
+            if (!edges[edgeIdx]) continue;
+            verifiedDarkCacheByEdgeIdx.set(edgeIdx, {
+              source: 'os_ngd',
+              lit_status: 'unlit',
+              confidence: typeof verified.confidence === 'number' ? verified.confidence : 0.9,
+              confidence_reason: verified.reason || 'no_lights_in_os_ngd',
+            });
+          }
+
+          debugLog(
+            `[safe-routes] 💡 OS NGD verification results: verifiedLights=${verifiedLights.length}, verifiedDarkEdges=${verifiedDarkCacheByEdgeIdx.size}`,
+          );
+          if (verification?.stats) {
+            debugLog(
+              `[safe-routes] 💡 OS NGD verification stats: memHits=${verification.stats.memoryCacheHits}, persistentHits=${verification.stats.persistentCacheHits}, persisted=${verification.stats.persistedDecisions}, cells=${verification.stats.totalCellsBeforeDedup || 0}->${verification.stats.totalCellsAfterDedup || 0}, queriedCells=${verification.stats.queriedClusters}, skippedByBudget=${verification.stats.skippedClustersBudget}`,
+            );
+          }
+
+          if (verifiedLights.length > 0 || verifiedDarkCacheByEdgeIdx.size > 0) {
+            recordOsNgdGapFill();
+          }
+
+          if (verifiedLights.length > 0 || verifiedDarkCacheByEdgeIdx.size > 0) {
+            allData.lights.elements = mergeVerifiedLights(
+              allData.lights.elements,
+              verifiedLights,
+            );
+            // Rebuild graph with verified lights and confirmed-dark cache entries.
+            ({
+              osmNodes, edges, adjacency, nodeGrid, weights,
+              cctvNodes, transitNodes, nodeDegree,
+            } = await computeGraphAndCandidates({
+              ...allData,
+              lightsCacheByEdgeIdx: verifiedDarkCacheByEdgeIdx,
+            }));
+            // Re-run pathfinding
+            const maxRouteDist = straightLineDist * 2.5;
+            rawRoutes = findRouteCandidates({
+              wpLat, wpLng,
+              nodeGrid, adjacency,
+              startNode: findNearestNode(nodeGrid, adjacency, oLatV, oLngV),
+              endNode: findNearestNode(nodeGrid, adjacency, dLatV, dLngV),
+              osmNodes, edges,
+              maxRouteDist,
+              findNearestNode,
+              findKSafestRoutes,
+              logger: debugLogger,
+              allowHazards,
+              edgeConfidences,
+            });
+            edgeConfidences = computeEdgeConfidencesForCurrentGraph();
+            lightVerificationStatus = 'verified';
+          } else {
+            lightVerificationStatus = 'no_gaps_found';
+            debugLog('[safe-routes] 💡 OS NGD returned no new verified lighting changes');
+          }
+        } catch (verifyErr) {
+          if (verifyErr?.code === 'SEARCH_CANCELLED') {
+            debugLog(`[safe-routes] 💡 Light verification cancelled: ${verifyErr.message}`);
+          } else {
+            console.warn(`[safe-routes] Light verification failed: ${verifyErr.message}`);
+          }
+          lightVerificationStatus = 'failed';
+        }
+      } else {
+        debugLog('[safe-routes] 💡 Light verification skipped: no route edges met the uncertainty threshold');
+      }
     }
-
-    // ── 9. Find 3–5 safest routes (A* — much faster than Dijkstra) ─────
-    debugLog(
-      `[safe-routes] 🔎 A* pathfinding (start=${startNode}, end=${endNode})...`,
-    );
-    cancelToken?.throwIfCancelled?.();
-    progress("pathfind", "Computing route candidates…", 86);
-    const t2 = Date.now();
-    const maxRouteDist = straightLineDist * 2.5;
-    const rawRoutes = findRouteCandidates({
-      wpLat,
-      wpLng,
-      nodeGrid,
-      adjacency,
-      startNode,
-      endNode,
-      osmNodes,
-      edges,
-      maxRouteDist,
-      findNearestNode,
-      findKSafestRoutes,
-      logger: debugLogger,
-    });
-
-    let pathfindTime = Date.now() - t2;
-    cancelToken?.throwIfCancelled?.();
-    progress("pathfind_done", "Scoring and formatting route options…", 89);
-    debugLog(
-      `[safe-routes] 🔎 A* found ${rawRoutes.length} routes in ${pathfindTime}ms`,
-    );
 
     if (rawRoutes.length === 0) {
       throw Object.assign(
@@ -777,9 +1062,34 @@ async function computeSafeRoutes(
       dLng: dLngV,
       enableOpeningHoursParse: ENABLE_RESPONSE_OPENING_HOURS_PARSE,
       responsePolicy,
+      edgeConfidences,
+      straightLineDist,
+      verificationFootprints,
     });
 
+    const routeSegmentDebug = rawRoutes.map((route, idx) => {
+      let uncertainSegments = 0;
+      let explicitDarkSegments = 0;
+      for (const edgeIdx of route.edges) {
+        const conf = edgeConfidences?.[edgeIdx];
+        if (conf?.needsVerification) uncertainSegments += 1;
+        if (conf?.reason === 'explicit_lit_no') explicitDarkSegments += 1;
+      }
+      return {
+        routeIndex: idx,
+        segments: route.edges.length,
+        explicitDarkSegments,
+        uncertainSegments,
+      };
+    });
+    console.log(
+      `[safe-routes] 📐 Path segments: ${routeSegmentDebug
+        .map((r) => `r${r.routeIndex}=segments:${r.segments},dark:${r.explicitDarkSegments},uncertain:${r.uncertainSegments}`)
+        .join(' | ')}`,
+    );
+
     const elapsed = Date.now() - startTime;
+    recordRouteLatency(elapsed);
     cancelToken?.throwIfCancelled?.();
     progress("finalize", "Finalizing route output…", 90);
     debugLog(
@@ -803,6 +1113,8 @@ async function computeSafeRoutes(
         pathfindTime,
         recorrectionMs,
         dataSources,
+        lightVerificationStatus,
+        verifiedLightsCount: verifiedLights.length,
       }),
     };
   } finally {

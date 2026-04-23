@@ -58,7 +58,7 @@ describe('safeRoutesUtils', () => {
 
     const result = heuristicOpen('bar');
 
-    expect(result).toEqual({ open: false, nextChange: 'opens at 11:00' });
+    expect(result).toEqual({ open: false, nextChange: 'opens at 10:00' });
   });
 
   test('heuristicOpen marks daytime generic places as open', () => {

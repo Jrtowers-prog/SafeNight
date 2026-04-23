@@ -11,7 +11,11 @@ function findRouteCandidates({
   findNearestNode,
   findKSafestRoutes,
   logger = console,
+  allowHazards = false,
+  edgeConfidences = null,
 }) {
+  const aStarOptions = { allowHazards, edgeConfidences };
+
   if (wpLat != null) {
     const waypointNode = findNearestNode(nodeGrid, adjacency, wpLat, wpLng);
 
@@ -24,6 +28,7 @@ function findRouteCandidates({
         waypointNode,
         maxRouteDist * 0.7,
         1,
+        aStarOptions,
       );
       const leg2Routes = findKSafestRoutes(
         osmNodes,
@@ -33,6 +38,7 @@ function findRouteCandidates({
         endNode,
         maxRouteDist * 0.7,
         3,
+        aStarOptions,
       );
 
       if (leg1Routes.length > 0 && leg2Routes.length > 0) {
@@ -61,6 +67,7 @@ function findRouteCandidates({
         endNode,
         maxRouteDist,
         3,
+        aStarOptions,
       );
     }
 
@@ -75,6 +82,7 @@ function findRouteCandidates({
       endNode,
       maxRouteDist,
       3,
+      aStarOptions,
     );
   }
 
@@ -86,6 +94,7 @@ function findRouteCandidates({
     endNode,
     maxRouteDist,
     3,
+    aStarOptions,
   );
 }
 
