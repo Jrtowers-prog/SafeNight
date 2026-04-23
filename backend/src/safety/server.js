@@ -32,10 +32,26 @@ const { errorHandler } = require('../shared/middleware/errorHandler');
 const { healthCheck } = require('../shared/middleware/healthCheck');
 
 const safeRoutesRouter = require('./routes/safeRoutes');
+const { startMetricsLogging } = require('./services/osMetrics');
 
 const app = express();
 const PORT = process.env.PORT || 3002;
 const SAFE_ROUTES_CACHE_DIR = (process.env.SAFE_ROUTES_CACHE_DIR || '').trim();
+
+// ─── OS Configuration Validation ─────────────────────────────────────────────
+const OS_API_KEY = (process.env.OS_API_KEY || '').trim();
+const OS_PLAN_MODE = (process.env.OS_PLAN_MODE || 'premium').trim().toLowerCase();
+const OS_MONTHLY_CAP_GBP = process.env.OS_MONTHLY_CAP_GBP;
+
+if (OS_API_KEY) {
+  if (!['premium', 'development'].includes(OS_PLAN_MODE)) {
+    throw new Error(`Invalid OS_PLAN_MODE="${OS_PLAN_MODE}". Must be "premium" or "development".`);
+  }
+  const cap = Number(OS_MONTHLY_CAP_GBP);
+  if (!Number.isFinite(cap) || cap <= 0) {
+    throw new Error(`Invalid OS_MONTHLY_CAP_GBP="${OS_MONTHLY_CAP_GBP}". Must be a positive number.`);
+  }
+}
 
 // ─── Trust proxy (Render / reverse-proxy sets X-Forwarded-For) ────────────────
 app.set('trust proxy', 1);
@@ -79,5 +95,13 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`[safety] Persistent cache: enabled (SAFE_ROUTES_CACHE_DIR=${SAFE_ROUTES_CACHE_DIR})`);
   } else {
     console.log('[safety] Persistent cache: disabled (set SAFE_ROUTES_CACHE_DIR to enable)');
+  }
+
+  // OS-first routing status
+  if (OS_API_KEY) {
+    console.log(`[safety] OS-first routing: enabled (plan=${OS_PLAN_MODE}, cap=${OS_MONTHLY_CAP_GBP} GBP)`);
+    startMetricsLogging();
+  } else {
+    console.log('[safety] OS-first routing: disabled (set OS_API_KEY to enable)');
   }
 });
