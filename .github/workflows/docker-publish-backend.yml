@@ -38,6 +38,8 @@ jobs:
             dockerfile: backend/Dockerfile.subscription
           - name: geocode
             dockerfile: backend/Dockerfile.geocode
+          - name: osm-ingestion
+            dockerfile: backend/Dockerfile.osm-ingestion
 
     steps:
       - name: Checkout
