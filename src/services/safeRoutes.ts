@@ -394,6 +394,36 @@ export interface SafeRoute extends DirectionsRoute {
   enrichedSegments?: EnrichedSegment[];
   routeStats?: RouteStats;
   routePOIs?: RoutePOIs;
+  queryFootprints?: Array<{
+    cellKey?: string;
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    centerLat?: number;
+    centerLng?: number;
+    segmentCount?: number;
+    status?: string;
+  }>;
+  lightUncertaintySpans?: Array<{
+    start: { lat: number; lng: number };
+    end: { lat: number; lng: number };
+    edgeCount?: number;
+    distance?: number;
+    reason?: string;
+    confidence?: number;
+  }>;
+  generalUncertaintyBoxes?: Array<{
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    reason?: string;
+    edgeCount?: number;
+    distance?: number;
+    confidence?: number;
+  }>;
+  uncertaintyBoxes?: Array<{ south: number; west: number; north: number; east: number }>;
 }
 
 export interface RouteStats {
@@ -525,6 +555,36 @@ interface RawSafeRoute {
     places: Array<{ lat: number; lng: number }>;
     crimes: Array<{ lat: number; lng: number; category?: string }>;
   };
+  queryFootprints?: Array<{
+    cellKey?: string;
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    centerLat?: number;
+    centerLng?: number;
+    segmentCount?: number;
+    status?: string;
+  }>;
+  lightUncertaintySpans?: Array<{
+    start: { lat: number; lng: number };
+    end: { lat: number; lng: number };
+    edgeCount?: number;
+    distance?: number;
+    reason?: string;
+    confidence?: number;
+  }>;
+  generalUncertaintyBoxes?: Array<{
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    reason?: string;
+    edgeCount?: number;
+    distance?: number;
+    confidence?: number;
+  }>;
+  uncertaintyBoxes?: Array<{ south: number; west: number; north: number; east: number }>;
 }
 
 interface RawResponse {
@@ -764,6 +824,10 @@ export async function fetchSafeRoutes(
         safety: r.safety,
         routeStats: r.routeStats,
         routePOIs: r.routePOIs,
+        queryFootprints: r.queryFootprints,
+        lightUncertaintySpans: r.lightUncertaintySpans,
+        generalUncertaintyBoxes: r.generalUncertaintyBoxes,
+        uncertaintyBoxes: r.uncertaintyBoxes,
       };
     });
 

@@ -703,7 +703,10 @@ export const buildLeafletHtml = (showZoomControls: boolean) => `<!DOCTYPE html>
         addFriendMarker(f);
       });
 
-      (d.roadLabels||[]).forEach(addRoadLabel);
+      var hasRoutes = Array.isArray(d.routes) && d.routes.length > 0;
+      if(d.showExtraDetail && hasRoutes){
+        (d.roadLabels||[]).forEach(addRoadLabel);
+      }
 
       if(d.origin && d.maxDistanceKm && d.maxDistanceKm>0 && !d.navLocation){
         L.polygon(makeCirclePolygon(d.origin.lat,d.origin.lng,d.maxDistanceKm,64),{color:'#22c55e',weight:2.5,fillColor:'#22c55e',fillOpacity:0.04,dashArray:'6 4'}).addTo(layerRange);
@@ -810,6 +813,7 @@ export const RouteMap = ({
   destination,
   routes,
   selectedRouteId,
+  showExtraDetail = true,
   safetyMarkers = [],
   routeSegments = [],
   roadLabels = [],
@@ -892,6 +896,7 @@ export const RouteMap = ({
     destination,
     routes,
     selectedRouteId,
+    showExtraDetail,
     safetyMarkers,
     routeSegments,
     roadLabels,
@@ -917,6 +922,7 @@ export const RouteMap = ({
     destination,
     routes,
     selectedRouteId,
+    showExtraDetail,
     safetyMarkers,
     routeSegments,
     roadLabels,
@@ -1006,6 +1012,7 @@ export const RouteMap = ({
       origin: p.origin ? toLL(p.origin) : null,
       destination: p.destination ? toLL(p.destination) : null,
       routes: mappedRoutes,
+      showExtraDetail: p.showExtraDetail ?? true,
       segments,
       safetyMarkers: mkrs,
       roadLabels: labels,
@@ -1126,6 +1133,7 @@ export const RouteMap = ({
     destination,
     routes,
     selectedRouteId,
+    showExtraDetail,
     safetyMarkers,
     routeSegments,
     roadLabels,

@@ -1020,7 +1020,8 @@ const buildMapHtml = (
       }
 
       /* — Road labels (navigation mode only) — */
-      if(data.navLocation){
+      var hasRoutes = Array.isArray(data.routes) && data.routes.length > 0;
+      if(data.showExtraDetail && hasRoutes){
         (data.roadLabels||[]).forEach(function(lbl){
           var el=document.createElement('div');
           el.className='road-label-3d';
@@ -1366,6 +1367,7 @@ export const RouteMap = ({
   destination,
   routes,
   selectedRouteId,
+  showExtraDetail = true,
   safetyMarkers = [],
   routeSegments = [],
   roadLabels = [],
@@ -1416,6 +1418,7 @@ export const RouteMap = ({
     destination,
     routes,
     selectedRouteId,
+    showExtraDetail,
     safetyMarkers,
     routeSegments,
     roadLabels,
@@ -1442,6 +1445,7 @@ export const RouteMap = ({
     destination,
     routes,
     selectedRouteId,
+    showExtraDetail,
     safetyMarkers,
     routeSegments,
     roadLabels,
@@ -1576,6 +1580,7 @@ export const RouteMap = ({
       origin: p.origin ? toLL(p.origin) : null,
       destination: p.destination ? toLL(p.destination) : null,
       routes: mappedRoutes,
+      showExtraDetail: p.showExtraDetail ?? true,
       segments,
       safetyMarkers: mkrs,
       roadLabels: labels,
@@ -1635,6 +1640,7 @@ export const RouteMap = ({
     destination,
     routes,
     selectedRouteId,
+    showExtraDetail,
     safetyMarkers,
     routeSegments,
     roadLabels,

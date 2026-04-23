@@ -208,6 +208,7 @@ export default function HomeScreen() {
   const [searchDistanceFilterMiles, setSearchDistanceFilterMiles] = useState<number>(3);
   const [sheetPlacesFitToken, setSheetPlacesFitToken] = useState(0);
   const [androidFitCandidateBoundsToken, setAndroidFitCandidateBoundsToken] = useState(0);
+  const [showMapExtraDetail, setShowMapExtraDetail] = useState(true);
   const [activePlaceCategoryKey, setActivePlaceCategoryKey] = useState<string | null>(null);
   const [selectedSheetCandidateId, setSelectedSheetCandidateId] = useState<string | null>(null);
   const [hasExplicitCandidateSelection, setHasExplicitCandidateSelection] = useState(false);
@@ -886,6 +887,7 @@ export default function HomeScreen() {
     h.directionsStatus === "loading" ||
     hasError ||
     h.outOfRange;
+  const hasRoutesWithLabels = h.routes.length > 0 && h.roadLabels.length > 0;
 
   const showDestinationCandidateSheet =
     !h.isNavActive &&
@@ -1937,6 +1939,7 @@ export default function HomeScreen() {
         destination={h.effectiveDestination}
         routes={isWebGuest ? [] : h.routes}
         selectedRouteId={isWebGuest ? null : h.selectedRouteId}
+        showExtraDetail={!isWebGuest && showMapExtraDetail}
         safetyMarkers={
           isWebGuest
             ? []
@@ -2790,6 +2793,48 @@ export default function HomeScreen() {
           />
         }
 
+        {!h.isNavActive && hasRoutesWithLabels && (
+          <View
+            pointerEvents="box-none"
+            style={[
+              styles.extraDetailToggleWrap,
+              {
+                top: insets.top + webBannerOffset + (isWeb && !isPhoneWeb ? 92 : 96),
+                left: isWeb && !isPhoneWeb ? webSidebarOverlayOffset + 12 : 12,
+              },
+            ]}
+          >
+            <Pressable
+              onPress={() => setShowMapExtraDetail((prev) => !prev)}
+              style={[
+                styles.extraDetailToggle,
+                showMapExtraDetail
+                  ? styles.extraDetailToggleActive
+                  : styles.extraDetailToggleInactive,
+              ]}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: showMapExtraDetail }}
+              accessibilityLabel="Toggle extra map detail"
+            >
+              <Ionicons
+                name={showMapExtraDetail ? "eye" : "eye-off"}
+                size={14}
+                color={showMapExtraDetail ? "#0f5132" : "#475467"}
+              />
+              <Text
+                style={[
+                  styles.extraDetailToggleText,
+                  showMapExtraDetail
+                    ? styles.extraDetailToggleTextActive
+                    : styles.extraDetailToggleTextInactive,
+                ]}
+              >
+                Extra detail
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
         {/* ── Category highlight banner — shows when user tapped a stat card ── */}
         {h.highlightCategory && (
           <View
@@ -3315,6 +3360,41 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: "#1570EF",
+  },
+  extraDetailToggleWrap: {
+    position: "absolute",
+    zIndex: 120,
+  },
+  extraDetailToggle: {
+    minHeight: 34,
+    borderRadius: 17,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 1,
+    ...(Platform.OS === "web"
+      ? { boxShadow: "0 6px 16px rgba(2, 6, 23, 0.16)" }
+      : {}),
+    elevation: 6,
+  },
+  extraDetailToggleActive: {
+    backgroundColor: "#dcfce7",
+    borderColor: "#16a34a",
+  },
+  extraDetailToggleInactive: {
+    backgroundColor: "#ffffff",
+    borderColor: "#d0d5dd",
+  },
+  extraDetailToggleText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  extraDetailToggleTextActive: {
+    color: "#0f5132",
+  },
+  extraDetailToggleTextInactive: {
+    color: "#344054",
   },
   pinBanner: {
     position: "absolute",

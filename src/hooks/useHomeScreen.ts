@@ -490,10 +490,12 @@ export function useHomeScreen() {
       }),
     );
     pois.places?.forEach((p: any, i: number) => {
-      // Only show confirmed-open places
-      if (p.open !== true) return;
       const name = p.name || p.amenity || "Place";
-      const status = p.nextChange ? ` · Open, ${p.nextChange}` : " · Open now";
+      const status = p.open === true
+        ? (p.nextChange ? ` · Open, ${p.nextChange}` : " · Open now")
+        : p.open === false
+          ? (p.nextChange ? ` · Closed, ${p.nextChange}` : " · Closed")
+          : " · Hours unknown";
       markers.push({
         id: `poi-place-${i}`,
         kind: "shop",
@@ -564,12 +566,41 @@ export function useHomeScreen() {
   // ── Route segments for coloured overlay ──
   const routeSegments = useMemo(() => {
     if (!selectedSafeRoute?.enrichedSegments) return [];
-    return selectedSafeRoute.enrichedSegments.map((seg, i) => ({
+    const baseSegments = selectedSafeRoute.enrichedSegments.map((seg, i) => ({
       id: `seg-${i}`,
       path: [seg.startCoord, seg.endCoord],
       color: seg.color,
       score: seg.safetyScore,
     }));
+
+    const lightUncertaintySegments = (selectedSafeRoute.lightUncertaintySpans || []).map((span, i) => ({
+      id: `light-gap-${i}`,
+      path: [
+        { latitude: span.start.lat, longitude: span.start.lng },
+        { latitude: span.end.lat, longitude: span.end.lng },
+      ],
+      color: span.reason === 'explicit_dark' ? '#DC2626' : '#F59E0B',
+      score: span.confidence ?? 0,
+    }));
+
+    const generalUncertaintyBoxes = (
+      selectedSafeRoute.generalUncertaintyBoxes?.length
+        ? selectedSafeRoute.generalUncertaintyBoxes
+        : selectedSafeRoute.uncertaintyBoxes || []
+    ).flatMap((box, i) => {
+      const sw = { latitude: box.south, longitude: box.west };
+      const nw = { latitude: box.north, longitude: box.west };
+      const ne = { latitude: box.north, longitude: box.east };
+      const se = { latitude: box.south, longitude: box.east };
+      return [
+        { id: `general-box-${i}-0`, path: [sw, nw], color: '#C026D3', score: 0 },
+        { id: `general-box-${i}-1`, path: [nw, ne], color: '#C026D3', score: 0 },
+        { id: `general-box-${i}-2`, path: [ne, se], color: '#C026D3', score: 0 },
+        { id: `general-box-${i}-3`, path: [se, sw], color: '#C026D3', score: 0 },
+      ];
+    });
+
+    return [...baseSegments, ...lightUncertaintySegments, ...generalUncertaintyBoxes];
   }, [selectedSafeRoute]);
 
   // ── Road labels ──

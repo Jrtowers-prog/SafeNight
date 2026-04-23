@@ -21,6 +21,8 @@ export type RouteMapProps = {
   destination: LatLng | null;
   routes: DirectionsRoute[];
   selectedRouteId: string | null;
+  /** Toggle for optional map detail overlays (currently road-name labels). */
+  showExtraDetail?: boolean;
   safetyMarkers?: SafetyMarker[];
   routeSegments?: RouteSegment[];
   roadLabels?: RoadLabel[];
