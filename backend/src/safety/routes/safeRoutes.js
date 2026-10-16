@@ -37,6 +37,8 @@ const {
 const {
   fetchAllSafetyData,
   fetchRoadNetworkOnly,
+  SAFETY_LEVEL_STANDARD,
+  SAFETY_LEVEL_EXTRA,
 } = require("../services/overpassClient");
 const { fetchCrimesInBbox } = require("../services/crimeClient");
 
@@ -159,12 +161,29 @@ const ENABLE_RESPONSE_OPENING_HOURS_PARSE =
 const routeCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-function getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng) {
+// Standard and extra results differ, so the safety level is part of the key.
+function getCacheKey(
+  oLat,
+  oLng,
+  dLat,
+  dLng,
+  wpLat,
+  wpLng,
+  safetyLevel = SAFETY_LEVEL_EXTRA,
+) {
   const r = (v) => Math.round(v * 1000) / 1000;
   const base = `${r(oLat)},${r(oLng)}->${r(dLat)},${r(dLng)}`;
-  return wpLat != null && wpLng != null
-    ? `${base}@${r(wpLat)},${r(wpLng)}`
-    : base;
+  const withWaypoint =
+    wpLat != null && wpLng != null ? `${base}@${r(wpLat)},${r(wpLng)}` : base;
+  return `${withWaypoint}|${safetyLevel}`;
+}
+
+// Missing → "extra" (unchanged default). Anything other than the two levels → null.
+function parseSafetyLevel(value) {
+  if (value == null || value === "") return SAFETY_LEVEL_EXTRA;
+  return value === SAFETY_LEVEL_STANDARD || value === SAFETY_LEVEL_EXTRA
+    ? value
+    : null;
 }
 
 // ── Request coalescing — share computation for concurrent identical requests ─
@@ -857,9 +876,18 @@ async function resolveSafeRoutesRequest({
   wpLng,
   onProgress,
   cancelToken = null,
+  safetyLevel = SAFETY_LEVEL_EXTRA,
 }) {
   cancelToken?.throwIfCancelled?.();
-  const cacheKey = getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng);
+  const cacheKey = getCacheKey(
+    oLat,
+    oLng,
+    dLat,
+    dLng,
+    wpLat,
+    wpLng,
+    safetyLevel,
+  );
   const cached = routeCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     console.log(`[safe-routes] 📋 Route cache hit for ${cacheKey}`);
@@ -932,6 +960,7 @@ async function resolveSafeRoutesRequest({
           cancelToken,
           (phase, message, pct) =>
             emitInflightProgress(inflightEntry, phase, message, pct),
+          safetyLevel,
         ),
       onQueueUpdate: ({
         queuePosition,
@@ -1065,6 +1094,15 @@ router.get("/", async (req, res) => {
       }
     }
 
+    // ── Optional safety level: "extra" (default) or "standard" (faster) ──
+    const safetyLevel = parseSafetyLevel(req.query.safety_level);
+    if (!safetyLevel) {
+      return res.status(400).json({
+        error: "INVALID_SAFETY_LEVEL",
+        message: "safety_level must be 'standard' or 'extra'.",
+      });
+    }
+
     // ── 2. Distance limit ───────────────────────────────────────────────
     const straightLineDist = haversine(
       oLat.value,
@@ -1117,6 +1155,7 @@ router.get("/", async (req, res) => {
       wpLat,
       wpLng,
       cancelToken,
+      safetyLevel,
     });
 
     res.json(result);
@@ -1145,6 +1184,10 @@ router.get("/", async (req, res) => {
           "This is usually a temporary issue with one of our data sources (OpenStreetMap or the Police crime API). Please wait a moment and try again.",
       });
     }
+  } finally {
+    activeSearch.release();
+  }
+});
 
 // ── GET /api/safe-routes/stream (SSE progress, low-overhead) ──────────────
 router.get("/stream", async (req, res) => {
@@ -1175,6 +1218,7 @@ router.get("/stream", async (req, res) => {
       clearInterval(keepAliveTimer);
       keepAliveTimer = null;
     }
+  };
 
   req.on("close", () => {
     closed = true;
@@ -1264,9 +1308,6 @@ router.get("/stream", async (req, res) => {
         wpLat = wpLatV.value;
         wpLng = wpLngV.value;
       }
-      throw err;
-    } finally {
-      inflight.delete(cacheKey);
     }
 
     const straightLineDist = haversine(
@@ -1279,6 +1320,16 @@ router.get("/stream", async (req, res) => {
     const maxDistanceKm = req.query.max_distance
       ? Math.min(Number(req.query.max_distance), DEFAULT_MAX_DISTANCE_KM)
       : DEFAULT_MAX_DISTANCE_KM;
+
+    const safetyLevel = parseSafetyLevel(req.query.safety_level);
+    if (!safetyLevel) {
+      send("error", {
+        error: "INVALID_SAFETY_LEVEL",
+        message: "safety_level must be 'standard' or 'extra'.",
+        pct: 0,
+      });
+      return res.end();
+    }
 
     if (straightLineKm > maxDistanceKm) {
       const maxDistanceMi = maxDistanceKm * 0.621371;
@@ -1297,6 +1348,7 @@ router.get("/stream", async (req, res) => {
       dLng.value,
       wpLat,
       wpLng,
+      safetyLevel,
     );
     if (inflight.has(cacheKey)) {
       send("phase", {
@@ -1322,6 +1374,7 @@ router.get("/stream", async (req, res) => {
       wpLng,
       onProgress,
       cancelToken,
+      safetyLevel,
     });
 
     if (source === "cache") {
@@ -1376,6 +1429,7 @@ async function computeSafeRoutes(
   wpLng = null,
   cancelToken = null,
   onProgress = null,
+  safetyLevel = SAFETY_LEVEL_EXTRA,
 ) {
   cancelToken?.throwIfCancelled?.();
   const upstreamAbortController = new AbortController();
@@ -1528,7 +1582,10 @@ async function computeSafeRoutes(
     const t0 = Date.now();
 
     let [allData, crimes] = await Promise.all([
-      fetchAllSafetyData(bbox, { signal: upstreamAbortController.signal }),
+      fetchAllSafetyData(bbox, {
+        signal: upstreamAbortController.signal,
+        level: safetyLevel,
+      }),
       fetchCrimesInBbox(bbox, { signal: upstreamAbortController.signal }),
     ]);
 
@@ -1570,7 +1627,10 @@ async function computeSafeRoutes(
       allData.transit,
       crimes,
       bbox,
-      { shouldCancel: () => cancelToken?.isCancelled?.() === true },
+      {
+        shouldCancel: () => cancelToken?.isCancelled?.() === true,
+        level: safetyLevel,
+      },
     );
     let graphTime = Date.now() - t1;
     cancelToken?.throwIfCancelled?.();
@@ -2053,19 +2113,9 @@ function collectRoutePOIs(
   }
 
   // Build sample points from EVERY node on the route — full coverage, no gaps.
-  const samplePoints = [];
   for (let i = 0; i < routePath.length; i++) {
     const n = osmNodes.get(routePath[i]);
-    if (n) samplePoints.push({ lat: n.lat, lng: n.lng });
-  }
-
-  // Helper: check if a point is within 30m of any point on the route
-  function isNearRoute(lat, lng) {
-    for (const sp of samplePoints) {
-      const d = Math.sqrt((lat - sp.lat) ** 2 + (lng - sp.lng) ** 2) * 111320;
-      if (d < NEARBY_M) return true;
-    }
-    return false;
+    if (n) indexRoutePoint(n.lat, n.lng);
   }
 
   // Collect CCTV near route
