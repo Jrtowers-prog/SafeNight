@@ -37,6 +37,8 @@ const {
 const {
   fetchAllSafetyData,
   fetchRoadNetworkOnly,
+  SAFETY_LEVEL_STANDARD,
+  SAFETY_LEVEL_EXTRA,
 } = require("../services/overpassClient");
 const { fetchCrimesInBbox } = require("../services/crimeClient");
 
@@ -159,12 +161,29 @@ const ENABLE_RESPONSE_OPENING_HOURS_PARSE =
 const routeCache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
-function getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng) {
+// Standard and extra results differ, so the safety level is part of the key.
+function getCacheKey(
+  oLat,
+  oLng,
+  dLat,
+  dLng,
+  wpLat,
+  wpLng,
+  safetyLevel = SAFETY_LEVEL_EXTRA,
+) {
   const r = (v) => Math.round(v * 1000) / 1000;
   const base = `${r(oLat)},${r(oLng)}->${r(dLat)},${r(dLng)}`;
-  return wpLat != null && wpLng != null
-    ? `${base}@${r(wpLat)},${r(wpLng)}`
-    : base;
+  const withWaypoint =
+    wpLat != null && wpLng != null ? `${base}@${r(wpLat)},${r(wpLng)}` : base;
+  return `${withWaypoint}|${safetyLevel}`;
+}
+
+// Missing → "extra" (unchanged default). Anything other than the two levels → null.
+function parseSafetyLevel(value) {
+  if (value == null || value === "") return SAFETY_LEVEL_EXTRA;
+  return value === SAFETY_LEVEL_STANDARD || value === SAFETY_LEVEL_EXTRA
+    ? value
+    : null;
 }
 
 // ── Request coalescing — share computation for concurrent identical requests ─
@@ -857,9 +876,18 @@ async function resolveSafeRoutesRequest({
   wpLng,
   onProgress,
   cancelToken = null,
+  safetyLevel = SAFETY_LEVEL_EXTRA,
 }) {
   cancelToken?.throwIfCancelled?.();
-  const cacheKey = getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng);
+  const cacheKey = getCacheKey(
+    oLat,
+    oLng,
+    dLat,
+    dLng,
+    wpLat,
+    wpLng,
+    safetyLevel,
+  );
   const cached = routeCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     console.log(`[safe-routes] 📋 Route cache hit for ${cacheKey}`);
@@ -932,6 +960,7 @@ async function resolveSafeRoutesRequest({
           cancelToken,
           (phase, message, pct) =>
             emitInflightProgress(inflightEntry, phase, message, pct),
+          safetyLevel,
         ),
       onQueueUpdate: ({
         queuePosition,
@@ -1065,6 +1094,15 @@ router.get("/", async (req, res) => {
       }
     }
 
+    // ── Optional safety level: "extra" (default) or "standard" (faster) ──
+    const safetyLevel = parseSafetyLevel(req.query.safety_level);
+    if (!safetyLevel) {
+      return res.status(400).json({
+        error: "INVALID_SAFETY_LEVEL",
+        message: "safety_level must be 'standard' or 'extra'.",
+      });
+    }
+
     // ── 2. Distance limit ───────────────────────────────────────────────
     const straightLineDist = haversine(
       oLat.value,
@@ -1117,6 +1155,7 @@ router.get("/", async (req, res) => {
       wpLat,
       wpLng,
       cancelToken,
+      safetyLevel,
     });
 
     res.json(result);
@@ -1282,6 +1321,16 @@ router.get("/stream", async (req, res) => {
       ? Math.min(Number(req.query.max_distance), DEFAULT_MAX_DISTANCE_KM)
       : DEFAULT_MAX_DISTANCE_KM;
 
+    const safetyLevel = parseSafetyLevel(req.query.safety_level);
+    if (!safetyLevel) {
+      send("error", {
+        error: "INVALID_SAFETY_LEVEL",
+        message: "safety_level must be 'standard' or 'extra'.",
+        pct: 0,
+      });
+      return res.end();
+    }
+
     if (straightLineKm > maxDistanceKm) {
       const maxDistanceMi = maxDistanceKm * 0.621371;
       const straightLineMi = straightLineKm * 0.621371;
@@ -1299,6 +1348,7 @@ router.get("/stream", async (req, res) => {
       dLng.value,
       wpLat,
       wpLng,
+      safetyLevel,
     );
     if (inflight.has(cacheKey)) {
       send("phase", {
@@ -1324,6 +1374,7 @@ router.get("/stream", async (req, res) => {
       wpLng,
       onProgress,
       cancelToken,
+      safetyLevel,
     });
 
     if (source === "cache") {
@@ -1378,6 +1429,7 @@ async function computeSafeRoutes(
   wpLng = null,
   cancelToken = null,
   onProgress = null,
+  safetyLevel = SAFETY_LEVEL_EXTRA,
 ) {
   cancelToken?.throwIfCancelled?.();
   const upstreamAbortController = new AbortController();
@@ -1530,7 +1582,10 @@ async function computeSafeRoutes(
     const t0 = Date.now();
 
     let [allData, crimes] = await Promise.all([
-      fetchAllSafetyData(bbox, { signal: upstreamAbortController.signal }),
+      fetchAllSafetyData(bbox, {
+        signal: upstreamAbortController.signal,
+        level: safetyLevel,
+      }),
       fetchCrimesInBbox(bbox, { signal: upstreamAbortController.signal }),
     ]);
 
@@ -1572,7 +1627,10 @@ async function computeSafeRoutes(
       allData.transit,
       crimes,
       bbox,
-      { shouldCancel: () => cancelToken?.isCancelled?.() === true },
+      {
+        shouldCancel: () => cancelToken?.isCancelled?.() === true,
+        level: safetyLevel,
+      },
     );
     let graphTime = Date.now() - t1;
     cancelToken?.throwIfCancelled?.();
