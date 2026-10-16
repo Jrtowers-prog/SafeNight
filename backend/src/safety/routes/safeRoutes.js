@@ -22,12 +22,22 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-const express = require('express');
-const opening_hours = require('opening_hours');
-const { validateLatitude, validateLongitude } = require('../../shared/validation/validate');
-const { haversine, bboxFromPoints, encodePolyline } = require('../services/geo');
-const { fetchAllSafetyData, fetchRoadNetworkOnly } = require('../services/overpassClient');
-const { fetchCrimesInBbox } = require('../services/crimeClient');
+const express = require("express");
+const opening_hours = require("opening_hours");
+const {
+  validateLatitude,
+  validateLongitude,
+} = require("../../shared/validation/validate");
+const {
+  haversine,
+  bboxFromPoints,
+  encodePolyline,
+} = require("../services/geo");
+const {
+  fetchAllSafetyData,
+  fetchRoadNetworkOnly,
+} = require("../services/overpassClient");
+const { fetchCrimesInBbox } = require("../services/crimeClient");
 
 /**
  * Strip PH (Public Holiday) rules from an opening_hours string.
@@ -37,13 +47,15 @@ const { fetchCrimesInBbox } = require('../services/crimeClient');
 function stripPH(str) {
   if (!str) return str;
   // Remove standalone "PH off" / "PH 08:00-20:00" clauses separated by ";"
-  return str
-    .split(';')
-    .map(s => s.trim())
-    .filter(s => !/^\s*PH\b/.test(s))
-    .map(s => s.replace(/,\s*PH\b/g, ''))   // "Mo-Su,PH 07:00-23:00" → "Mo-Su 07:00-23:00"
-    .filter(Boolean)
-    .join('; ') || null;
+  return (
+    str
+      .split(";")
+      .map((s) => s.trim())
+      .filter((s) => !/^\s*PH\b/.test(s))
+      .map((s) => s.replace(/,\s*PH\b/g, "")) // "Mo-Su,PH 07:00-23:00" → "Mo-Su 07:00-23:00"
+      .filter(Boolean)
+      .join("; ") || null
+  );
 }
 
 /**
@@ -52,25 +64,27 @@ function stripPH(str) {
  *   - nextChange is a human-readable string like "closes at 22:00" or "opens at 08:00"
  */
 function checkOpenNow(hoursString) {
-  if (!hoursString) return { open: null, nextChange: null };  // unknown
+  if (!hoursString) return { open: null, nextChange: null }; // unknown
   try {
     const cleaned = stripPH(hoursString);
     if (!cleaned) return { open: null, nextChange: null };
-    const oh = new opening_hours(cleaned, { address: { country_code: 'gb' } });
+    const oh = new opening_hours(cleaned, { address: { country_code: "gb" } });
     const now = new Date();
     const isOpen = oh.getState(now);
     let nextChange = null;
     try {
       const next = oh.getNextChange(now);
       if (next) {
-        const h = next.getHours().toString().padStart(2, '0');
-        const m = next.getMinutes().toString().padStart(2, '0');
+        const h = next.getHours().toString().padStart(2, "0");
+        const m = next.getMinutes().toString().padStart(2, "0");
         nextChange = isOpen ? `closes at ${h}:${m}` : `opens at ${h}:${m}`;
       }
-    } catch { /* some strings don't support getNextChange */ }
+    } catch {
+      /* some strings don't support getNextChange */
+    }
     return { open: isOpen, nextChange };
   } catch {
-    return { open: null, nextChange: null };  // unparseable
+    return { open: null, nextChange: null }; // unparseable
   }
 }
 
@@ -83,27 +97,42 @@ function checkOpenNow(hoursString) {
  *   - Unknown → likely open during daytime only
  */
 const ALWAYS_OPEN = new Set([
-  'hospital', 'clinic', 'pharmacy', 'fuel', 'atm',
-  'police', 'fire_station', 'hotel', 'hostel',
-  'charging_station', 'parking', 'toilets',
+  "hospital",
+  "clinic",
+  "pharmacy",
+  "fuel",
+  "atm",
+  "police",
+  "fire_station",
+  "hotel",
+  "hostel",
+  "charging_station",
+  "parking",
+  "toilets",
 ]);
 const EVENING_TYPES = new Set([
-  'pub', 'bar', 'nightclub', 'biergarten', 'casino',
+  "pub",
+  "bar",
+  "nightclub",
+  "biergarten",
+  "casino",
 ]);
 
 function heuristicOpen(amenityType) {
   const hour = new Date().getHours();
-  const type = (amenityType || '').toLowerCase();
+  const type = (amenityType || "").toLowerCase();
 
-  if (ALWAYS_OPEN.has(type)) return { open: true, nextChange: 'open 24/7' };
+  if (ALWAYS_OPEN.has(type)) return { open: true, nextChange: "open 24/7" };
   if (EVENING_TYPES.has(type)) {
     // Pubs/bars: typically 11:00–23:00 or later
-    if (hour >= 11 && hour < 23) return { open: true, nextChange: 'closes at 23:00' };
-    return { open: false, nextChange: 'opens at 11:00' };
+    if (hour >= 11 && hour < 23)
+      return { open: true, nextChange: "closes at 23:00" };
+    return { open: false, nextChange: "opens at 11:00" };
   }
   // Default shops/restaurants/cafes: 07:00–20:00
-  if (hour >= 7 && hour < 20) return { open: true, nextChange: 'closes at 20:00' };
-  return { open: false, nextChange: 'opens at 07:00' };
+  if (hour >= 7 && hour < 20)
+    return { open: true, nextChange: "closes at 20:00" };
+  return { open: false, nextChange: "opens at 07:00" };
 }
 const {
   buildGraph,
@@ -114,7 +143,7 @@ const {
   routeToPolyline,
   routeSafetyBreakdown,
   getWeights,
-} = require('../services/safetyGraph');
+} = require("../services/safetyGraph");
 
 const router = express.Router();
 
@@ -130,29 +159,66 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 function getCacheKey(oLat, oLng, dLat, dLng, wpLat, wpLng) {
   const r = (v) => Math.round(v * 1000) / 1000;
   const base = `${r(oLat)},${r(oLng)}->${r(dLat)},${r(dLng)}`;
-  return (wpLat != null && wpLng != null) ? `${base}@${r(wpLat)},${r(wpLng)}` : base;
+  return wpLat != null && wpLng != null
+    ? `${base}@${r(wpLat)},${r(wpLng)}`
+    : base;
 }
 
 // ── Request coalescing — share computation for concurrent identical requests ─
 const inflight = new Map();
 
+function createServerBusyError(detailMessage) {
+  return Object.assign(
+    new Error(
+      "SafeNight servers are busy right now. Please try again in a moment.",
+    ),
+    {
+      statusCode: 503,
+      code: "SERVER_BUSY",
+      detail:
+        detailMessage ||
+        "The route safety provider is overloaded or timing out. Please retry shortly.",
+    },
+  );
+}
+
+function isServerBusyFailure(err) {
+  if (!err) return false;
+  if (err.code === "SERVER_BUSY") return true;
+  if (Number(err.statusCode) === 503) return true;
+
+  const msg = String(err.message || "").toLowerCase();
+  return (
+    msg.includes("overpass") ||
+    msg.includes("all overpass servers failed") ||
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
+    msg.includes("returned 504") ||
+    msg.includes("returned 503") ||
+    msg.includes("returned 502") ||
+    msg.includes("returned 429") ||
+    msg.includes("server is at capacity") ||
+    msg.includes("queue timeout")
+  );
+}
+
 function safetyLabel(score) {
-  if (score >= 75) return { label: 'Very Safe', color: '#2E7D32' };
-  if (score >= 55) return { label: 'Safe', color: '#558B2F' };
-  if (score >= 35) return { label: 'Moderate', color: '#F9A825' };
-  return { label: 'Use Caution', color: '#C62828' };
+  if (score >= 75) return { label: "Very Safe", color: "#2E7D32" };
+  if (score >= 55) return { label: "Safe", color: "#558B2F" };
+  if (score >= 35) return { label: "Moderate", color: "#F9A825" };
+  return { label: "Use Caution", color: "#C62828" };
 }
 
 function segmentColor(safetyScore) {
-  if (safetyScore >= 0.7) return '#4CAF50';
-  if (safetyScore >= 0.5) return '#8BC34A';
-  if (safetyScore >= 0.35) return '#FFC107';
-  if (safetyScore >= 0.2) return '#FF9800';
-  return '#F44336';
+  if (safetyScore >= 0.7) return "#4CAF50";
+  if (safetyScore >= 0.5) return "#8BC34A";
+  if (safetyScore >= 0.35) return "#FFC107";
+  if (safetyScore >= 0.2) return "#FF9800";
+  return "#F44336";
 }
 
 // ── GET /api/safe-routes ────────────────────────────────────────────────────
-router.get('/', async (req, res) => {
+router.get("/", async (req, res) => {
   const startTime = Date.now();
 
   try {
@@ -168,7 +234,8 @@ router.get('/', async (req, res) => {
     if (!dLng.valid) return res.status(400).json({ error: dLng.error });
 
     // ── Optional waypoint (direction-bias / via point) ──────────────────
-    let wpLat = null, wpLng = null;
+    let wpLat = null,
+      wpLng = null;
     if (req.query.waypoint_lat != null && req.query.waypoint_lng != null) {
       const wpLatV = validateLatitude(req.query.waypoint_lat);
       const wpLngV = validateLongitude(req.query.waypoint_lng);
@@ -179,7 +246,12 @@ router.get('/', async (req, res) => {
     }
 
     // ── 2. Distance limit ───────────────────────────────────────────────
-    const straightLineDist = haversine(oLat.value, oLng.value, dLat.value, dLng.value);
+    const straightLineDist = haversine(
+      oLat.value,
+      oLng.value,
+      dLat.value,
+      dLng.value,
+    );
     const straightLineKm = straightLineDist / 1000;
 
     // The gateway sends ?max_distance=<km> based on the user's subscription tier
@@ -195,16 +267,16 @@ router.get('/', async (req, res) => {
       const lngDiff = Math.abs(dLng.value - oLng.value);
       const bufferDeg = 0.003; // ~300 m buffer on each side
       const heightKm = (latDiff + 2 * bufferDeg) * 111.32;
-      const midLatRad = ((oLat.value + dLat.value) / 2) * Math.PI / 180;
-      const widthKm  = (lngDiff + 2 * bufferDeg) * 111.32 * Math.cos(midLatRad);
-      const areaKm2  = heightKm * widthKm;
+      const midLatRad = (((oLat.value + dLat.value) / 2) * Math.PI) / 180;
+      const widthKm = (lngDiff + 2 * bufferDeg) * 111.32 * Math.cos(midLatRad);
+      const areaKm2 = heightKm * widthKm;
       // ~4 000 elements/km² (roads, nodes, lights, CCTV, places, transit, crimes)
       const estimatedDataPoints = Math.round(areaKm2 * 4000);
 
       const straightLineMi = straightLineKm * 0.621371;
       const maxDistanceMi = maxDistanceKm * 0.621371;
       return res.status(400).json({
-        error: 'DESTINATION_OUT_OF_RANGE',
+        error: "DESTINATION_OUT_OF_RANGE",
         message: `That destination is ${straightLineMi.toFixed(1)} mi away — your limit is ${maxDistanceMi.toFixed(1)} mi.`,
         maxDistanceKm,
         actualDistanceKm: Math.round(straightLineKm * 10) / 10,
@@ -215,7 +287,14 @@ router.get('/', async (req, res) => {
     }
 
     // ── 3. Check route cache ────────────────────────────────────────────
-    const cacheKey = getCacheKey(oLat.value, oLng.value, dLat.value, dLng.value, wpLat, wpLng);
+    const cacheKey = getCacheKey(
+      oLat.value,
+      oLng.value,
+      dLat.value,
+      dLng.value,
+      wpLat,
+      wpLng,
+    );
     const cached = routeCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       console.log(`[safe-routes] 📋 Route cache hit for ${cacheKey}`);
@@ -224,12 +303,31 @@ router.get('/', async (req, res) => {
 
     // ── 4. Request coalescing ───────────────────────────────────────────
     if (inflight.has(cacheKey)) {
-      console.log(`[safe-routes] ⏳ Coalescing with in-flight request for ${cacheKey}`);
+      console.log(
+        `[safe-routes] ⏳ Coalescing with in-flight request for ${cacheKey}`,
+      );
       try {
         const result = await inflight.get(cacheKey);
+        if (!result) {
+          const busy = createServerBusyError(
+            "A shared route computation failed due to temporary server load.",
+          );
+          return res.status(busy.statusCode).json({
+            error: busy.code,
+            message: busy.message,
+            detail: busy.detail,
+          });
+        }
         return res.json(result);
-      } catch (err) {
-        return res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Computation failed.' });
+      } catch (_err) {
+        const busy = createServerBusyError(
+          "A shared route computation failed due to temporary server load.",
+        );
+        return res.status(busy.statusCode).json({
+          error: busy.code,
+          message: busy.message,
+          detail: busy.detail,
+        });
       }
     }
 
@@ -243,9 +341,16 @@ router.get('/', async (req, res) => {
 
     try {
       const result = await computeSafeRoutes(
-        oLat.value, oLng.value, dLat.value, dLng.value,
-        straightLineDist, straightLineKm, startTime, maxDistanceKm,
-        wpLat, wpLng,
+        oLat.value,
+        oLng.value,
+        dLat.value,
+        dLng.value,
+        straightLineDist,
+        straightLineKm,
+        startTime,
+        maxDistanceKm,
+        wpLat,
+        wpLng,
       );
 
       // Cache the result
@@ -261,9 +366,21 @@ router.get('/', async (req, res) => {
         return res.status(err.statusCode).json({
           error: err.code,
           message: err.message,
-          ...(err.graphNodes != null && { graphNodes: err.graphNodes, graphEdges: err.graphEdges }),
+          ...(err.detail != null && { detail: err.detail }),
+          ...(err.graphNodes != null && {
+            graphNodes: err.graphNodes,
+            graphEdges: err.graphEdges,
+          }),
           ...(err.roadCount != null && { roadCount: err.roadCount }),
           ...(err.which != null && { which: err.which }),
+        });
+      }
+      if (isServerBusyFailure(err)) {
+        const busy = createServerBusyError(err.message);
+        return res.status(busy.statusCode).json({
+          error: busy.code,
+          message: busy.message,
+          detail: busy.detail,
         });
       }
       throw err;
@@ -281,10 +398,19 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error(`[safe-routes] ❌ Error:`, err);
     if (!res.headersSent) {
+      if (isServerBusyFailure(err)) {
+        const busy = createServerBusyError(err.message);
+        return res.status(busy.statusCode).json({
+          error: busy.code,
+          message: busy.message,
+          detail: busy.detail,
+        });
+      }
       res.status(500).json({
-        error: 'INTERNAL_ERROR',
-        message: 'Something went wrong on our end while computing your route.',
-        detail: 'This is usually a temporary issue with one of our data sources (OpenStreetMap or the Police crime API). Please wait a moment and try again.',
+        error: "INTERNAL_ERROR",
+        message: "Something went wrong on our end while computing your route.",
+        detail:
+          "This is usually a temporary issue with one of our data sources (OpenStreetMap or the Police crime API). Please wait a moment and try again.",
       });
     }
   }
@@ -293,8 +419,21 @@ router.get('/', async (req, res) => {
 /**
  * Core computation — separated for request coalescing.
  */
-async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, straightLineKm, startTime, maxDistanceKm = DEFAULT_MAX_DISTANCE_KM, wpLat = null, wpLng = null) {
-  console.log(`[safe-routes] 🔍 Computing: ${oLatV},${oLngV} → ${dLatV},${dLngV} (${straightLineKm.toFixed(1)} km)`);
+async function computeSafeRoutes(
+  oLatV,
+  oLngV,
+  dLatV,
+  dLngV,
+  straightLineDist,
+  straightLineKm,
+  startTime,
+  maxDistanceKm = DEFAULT_MAX_DISTANCE_KM,
+  wpLat = null,
+  wpLng = null,
+) {
+  console.log(
+    `[safe-routes] 🔍 Computing: ${oLatV},${oLngV} → ${dLatV},${dLngV} (${straightLineKm.toFixed(1)} km)`,
+  );
 
   // ═══════════════════════════════════════════════════════════════════════
   // PHASE 1 — Corridor discovery (skip for short distances to save time)
@@ -310,31 +449,58 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   if (straightLineDist >= SKIP_PHASE1_DIST) {
     console.log(`[safe-routes] 🛤️  Phase 1: Discovering walking corridor...`);
     const t0p1 = Date.now();
-    const initialBufferM = Math.max(400, Math.min(800, straightLineDist * 0.25));
-    const initialBboxPoints = [{ lat: oLatV, lng: oLngV }, { lat: dLatV, lng: dLngV }];
+    const initialBufferM = Math.max(
+      400,
+      Math.min(800, straightLineDist * 0.25),
+    );
+    const initialBboxPoints = [
+      { lat: oLatV, lng: oLngV },
+      { lat: dLatV, lng: dLngV },
+    ];
     if (wpLat != null) initialBboxPoints.push({ lat: wpLat, lng: wpLng });
     const initialBbox = bboxFromPoints(initialBboxPoints, initialBufferM);
 
     const roadData = await fetchRoadNetworkOnly(initialBbox);
     distGraph = buildDistanceOnlyGraph(roadData);
 
-    const distStart = findNearestNode(distGraph.nodeGrid, distGraph.adjacency, oLatV, oLngV);
-    const distEnd = findNearestNode(distGraph.nodeGrid, distGraph.adjacency, dLatV, dLngV);
+    const distStart = findNearestNode(
+      distGraph.nodeGrid,
+      distGraph.adjacency,
+      oLatV,
+      oLngV,
+    );
+    const distEnd = findNearestNode(
+      distGraph.nodeGrid,
+      distGraph.adjacency,
+      dLatV,
+      dLngV,
+    );
 
     if (distStart && distEnd) {
       shortestPath = aStarDistance(
-        distGraph.osmNodes, distGraph.edges, distGraph.adjacency,
-        distStart, distEnd, straightLineDist * 3,
+        distGraph.osmNodes,
+        distGraph.edges,
+        distGraph.adjacency,
+        distStart,
+        distEnd,
+        straightLineDist * 3,
       );
     }
     phase1Time = Date.now() - t0p1;
-    console.log(`[safe-routes] ✅ Phase 1: ${phase1Time}ms — ${
-      shortestPath
-        ? shortestPath.path.length + ' nodes, ' + Math.round(shortestPath.totalDist) + 'm'
-        : 'fallback to straight-line corridor'
-    }`);
+    console.log(
+      `[safe-routes] ✅ Phase 1: ${phase1Time}ms — ${
+        shortestPath
+          ? shortestPath.path.length +
+            " nodes, " +
+            Math.round(shortestPath.totalDist) +
+            "m"
+          : "fallback to straight-line corridor"
+      }`,
+    );
   } else {
-    console.log(`[safe-routes] ⏩ Phase 1: skipped (${Math.round(straightLineDist)}m < ${SKIP_PHASE1_DIST}m)`);
+    console.log(
+      `[safe-routes] ⏩ Phase 1: skipped (${Math.round(straightLineDist)}m < ${SKIP_PHASE1_DIST}m)`,
+    );
   }
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -367,10 +533,14 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   if (wpLat != null) corridorPoints.push({ lat: wpLat, lng: wpLng });
 
   const bbox = bboxFromPoints(corridorPoints, corridorBufferM);
-  console.log(`[safe-routes] 📐 Phase 2: Corridor from ${corridorPoints.length} waypoints + ${corridorBufferM}m buffer`);
+  console.log(
+    `[safe-routes] 📐 Phase 2: Corridor from ${corridorPoints.length} waypoints + ${corridorBufferM}m buffer`,
+  );
 
   // ── Fetch ALL safety data within the corridor ───────────────────────
-  console.log(`[safe-routes] 📡 Fetching safety data in corridor (Overpass + Crime)...`);
+  console.log(
+    `[safe-routes] 📡 Fetching safety data in corridor (Overpass + Crime)...`,
+  );
   const t0 = Date.now();
 
   let [allData, crimes] = await Promise.all([
@@ -381,25 +551,47 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   let dataTime = Date.now() - t0;
   console.log(`[safe-routes] 📡 Corridor data fetched in ${dataTime}ms`);
 
-  let roadCount = allData.roads.elements.filter((e) => e.type === 'way').length;
-  let nodeCount = allData.roads.elements.filter((e) => e.type === 'node').length;
-  console.log(`[safe-routes] 📊 Data: ${roadCount} roads, ${nodeCount} nodes, ${crimes.length} crimes, ${allData.lights.elements.length} lights, ${allData.cctv.elements.length} CCTV`);
+  let roadCount = allData.roads.elements.filter((e) => e.type === "way").length;
+  let nodeCount = allData.roads.elements.filter(
+    (e) => e.type === "node",
+  ).length;
+  console.log(
+    `[safe-routes] 📊 Data: ${roadCount} roads, ${nodeCount} nodes, ${crimes.length} crimes, ${allData.lights.elements.length} lights, ${allData.cctv.elements.length} CCTV`,
+  );
 
   // ── 6b. Extract light & place node positions for POI markers ────────
   // ── 7. Build safety-weighted graph (with coverage maps) ─────────────
   console.log(`[safe-routes] 🏗️  Building graph + coverage maps...`);
   const t1 = Date.now();
-  let { osmNodes, edges, adjacency, nodeGrid, weights, cctvNodes, transitNodes, nodeDegree } = buildGraph(
-    allData.roads, allData.lights, allData.cctv, allData.places, allData.transit,
-    crimes, bbox,
+  let {
+    osmNodes,
+    edges,
+    adjacency,
+    nodeGrid,
+    weights,
+    cctvNodes,
+    transitNodes,
+    nodeDegree,
+  } = buildGraph(
+    allData.roads,
+    allData.lights,
+    allData.cctv,
+    allData.places,
+    allData.transit,
+    crimes,
+    bbox,
   );
   let graphTime = Date.now() - t1;
-  console.log(`[safe-routes] 📊 Graph: ${osmNodes.size} nodes, ${edges.length} edges (built in ${graphTime}ms)`);
+  console.log(
+    `[safe-routes] 📊 Graph: ${osmNodes.size} nodes, ${edges.length} edges (built in ${graphTime}ms)`,
+  );
 
   if (edges.length === 0) {
     throw Object.assign(
-      new Error('We found roads in this area but none of them are walkable (they may all be motorways or private roads). Try a destination in a more pedestrian-friendly area.'),
-      { statusCode: 404, code: 'NO_WALKING_NETWORK', roadCount },
+      new Error(
+        "We found roads in this area but none of them are walkable (they may all be motorways or private roads). Try a destination in a more pedestrian-friendly area.",
+      ),
+      { statusCode: 404, code: "NO_WALKING_NETWORK", roadCount },
     );
   }
 
@@ -408,19 +600,21 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   let endNode = findNearestNode(nodeGrid, adjacency, dLatV, dLngV);
 
   if (!startNode || !endNode) {
-    const which = !startNode ? 'origin' : 'destination';
+    const which = !startNode ? "origin" : "destination";
     throw Object.assign(
       new Error(
         `We couldn't find a walkable road within 200 m of your ${which}. ` +
-        `This can happen if the point is in the middle of a park, body of water, or private land. ` +
-        `Try tapping a spot closer to a street or footpath.`
+          `This can happen if the point is in the middle of a park, body of water, or private land. ` +
+          `Try tapping a spot closer to a street or footpath.`,
       ),
-      { statusCode: 404, code: 'NO_NEARBY_ROAD', which },
+      { statusCode: 404, code: "NO_NEARBY_ROAD", which },
     );
   }
 
   // ── 9. Find 3–5 safest routes (A* — much faster than Dijkstra) ─────
-  console.log(`[safe-routes] 🔎 A* pathfinding (start=${startNode}, end=${endNode})...`);
+  console.log(
+    `[safe-routes] 🔎 A* pathfinding (start=${startNode}, end=${endNode})...`,
+  );
   const t2 = Date.now();
   const maxRouteDist = straightLineDist * 2.5;
   let rawRoutes;
@@ -428,12 +622,28 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   if (wpLat != null) {
     // ── Two-leg via-waypoint pathfinding ──────────────────────────────
     const waypointNode = findNearestNode(nodeGrid, adjacency, wpLat, wpLng);
-    if (waypointNode && waypointNode !== startNode && waypointNode !== endNode) {
+    if (
+      waypointNode &&
+      waypointNode !== startNode &&
+      waypointNode !== endNode
+    ) {
       const leg1Routes = findKSafestRoutes(
-        osmNodes, edges, adjacency, startNode, waypointNode, maxRouteDist * 0.7, 1,
+        osmNodes,
+        edges,
+        adjacency,
+        startNode,
+        waypointNode,
+        maxRouteDist * 0.7,
+        1,
       );
       const leg2Routes = findKSafestRoutes(
-        osmNodes, edges, adjacency, waypointNode, endNode, maxRouteDist * 0.7, 3,
+        osmNodes,
+        edges,
+        adjacency,
+        waypointNode,
+        endNode,
+        maxRouteDist * 0.7,
+        3,
       );
       if (leg1Routes.length > 0 && leg2Routes.length > 0) {
         const leg1 = leg1Routes[0];
@@ -442,30 +652,67 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
           edges: [...leg1.edges, ...leg2.edges],
           totalDist: leg1.totalDist + leg2.totalDist,
         }));
-        console.log(`[safe-routes] 📍 Via waypoint node ${waypointNode}: ${leg1.path.length}+${leg2Routes[0].path.length} nodes, ${rawRoutes.length} combined routes`);
+        console.log(
+          `[safe-routes] 📍 Via waypoint node ${waypointNode}: ${leg1.path.length}+${leg2Routes[0].path.length} nodes, ${rawRoutes.length} combined routes`,
+        );
       } else {
-        console.log(`[safe-routes] ⚠️  Via routing failed (leg1=${leg1Routes.length}, leg2=${leg2Routes.length}), falling back to direct`);
-        rawRoutes = findKSafestRoutes(osmNodes, edges, adjacency, startNode, endNode, maxRouteDist, 3);
+        console.log(
+          `[safe-routes] ⚠️  Via routing failed (leg1=${leg1Routes.length}, leg2=${leg2Routes.length}), falling back to direct`,
+        );
+        rawRoutes = findKSafestRoutes(
+          osmNodes,
+          edges,
+          adjacency,
+          startNode,
+          endNode,
+          maxRouteDist,
+          3,
+        );
       }
     } else {
-      console.log(`[safe-routes] ⚠️  Waypoint node not found in graph, falling back to direct`);
-      rawRoutes = findKSafestRoutes(osmNodes, edges, adjacency, startNode, endNode, maxRouteDist, 3);
+      console.log(
+        `[safe-routes] ⚠️  Waypoint node not found in graph, falling back to direct`,
+      );
+      rawRoutes = findKSafestRoutes(
+        osmNodes,
+        edges,
+        adjacency,
+        startNode,
+        endNode,
+        maxRouteDist,
+        3,
+      );
     }
   } else {
-    rawRoutes = findKSafestRoutes(osmNodes, edges, adjacency, startNode, endNode, maxRouteDist, 3);
+    rawRoutes = findKSafestRoutes(
+      osmNodes,
+      edges,
+      adjacency,
+      startNode,
+      endNode,
+      maxRouteDist,
+      3,
+    );
   }
 
   let pathfindTime = Date.now() - t2;
-  console.log(`[safe-routes] 🔎 A* found ${rawRoutes.length} routes in ${pathfindTime}ms`);
+  console.log(
+    `[safe-routes] 🔎 A* found ${rawRoutes.length} routes in ${pathfindTime}ms`,
+  );
 
   if (rawRoutes.length === 0) {
     throw Object.assign(
       new Error(
         `We analysed ${osmNodes.size.toLocaleString()} intersections and ${edges.length.toLocaleString()} road segments ` +
-        `but couldn't connect your origin to the destination. ` +
-        `They're likely separated by a barrier with no pedestrian crossing — a motorway, river, railway, or restricted area.`
+          `but couldn't connect your origin to the destination. ` +
+          `They're likely separated by a barrier with no pedestrian crossing — a motorway, river, railway, or restricted area.`,
       ),
-      { statusCode: 404, code: 'NO_ROUTE_FOUND', graphNodes: osmNodes.size, graphEdges: edges.length },
+      {
+        statusCode: 404,
+        code: "NO_ROUTE_FOUND",
+        graphNodes: osmNodes.size,
+        graphEdges: edges.length,
+      },
     );
   }
 
@@ -474,7 +721,12 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
 
   const lightNodes = [];
   for (const el of allData.lights.elements) {
-    if (el.type === 'node' && el.tags?.highway === 'street_lamp' && el.lat && el.lon) {
+    if (
+      el.type === "node" &&
+      el.tags?.highway === "street_lamp" &&
+      el.lat &&
+      el.lon
+    ) {
       lightNodes.push({ lat: el.lat, lng: el.lon });
     }
   }
@@ -483,9 +735,19 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
     const lat = el.lat || el.center?.lat;
     const lng = el.lon || el.center?.lon;
     if (lat && lng) {
-      const name = el.tags?.name || el.tags?.['name:en'] || el.tags?.brand || el.tags?.operator || '';
-      const amenity = el.tags?.amenity || el.tags?.shop || el.tags?.leisure || el.tags?.tourism || '';
-      const hoursRaw = el.tags?.opening_hours || '';
+      const name =
+        el.tags?.name ||
+        el.tags?.["name:en"] ||
+        el.tags?.brand ||
+        el.tags?.operator ||
+        "";
+      const amenity =
+        el.tags?.amenity ||
+        el.tags?.shop ||
+        el.tags?.leisure ||
+        el.tags?.tourism ||
+        "";
+      const hoursRaw = el.tags?.opening_hours || "";
       // 1) Try OSM opening_hours tag (most accurate)
       let { open, nextChange } = checkOpenNow(hoursRaw);
       // 2) Fall back to type-based heuristic if no hours data
@@ -496,7 +758,15 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       }
       // Only keep confirmed-open places
       if (open !== true) continue;
-      placeNodes.push({ lat, lng, name, amenity, open, nextChange, opening_hours: hoursRaw });
+      placeNodes.push({
+        lat,
+        lng,
+        name,
+        amenity,
+        open,
+        nextChange,
+        opening_hours: hoursRaw,
+      });
     }
   }
 
@@ -516,7 +786,7 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
     let transitStopCount = 0;
     let cctvNearCount = 0;
     const roadNameChanges = [];
-    let lastRoadName = '';
+    let lastRoadName = "";
     let cumulativeDist = 0;
 
     for (let i = 0; i < route.edges.length; i++) {
@@ -533,7 +803,7 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       cctvNearCount += edge.nearbyCctvCount;
 
       // Track road name changes for chart annotations
-      const rn = edge.roadName || '';
+      const rn = edge.roadName || "";
       if (rn && rn !== lastRoadName) {
         roadNameChanges.push({
           segmentIndex: i,
@@ -564,13 +834,30 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
     }
 
     // Collect nearby POIs along the route for map markers
-    const routePOIs = collectRoutePOIs(route.path, route.edges, edges, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimes);
+    const routePOIs = collectRoutePOIs(
+      route.path,
+      route.edges,
+      edges,
+      osmNodes,
+      cctvNodes,
+      transitNodes,
+      nodeDegree,
+      lightNodes,
+      placeNodes,
+      crimes,
+    );
 
     // Compute route stats
     const routeStats = {
       deadEnds: deadEndCount,
-      sidewalkPct: route.totalDist > 0 ? Math.round((sidewalkDist / route.totalDist) * 100) : 0,
-      unpavedPct: route.totalDist > 0 ? Math.round((unpavedDist / route.totalDist) * 100) : 0,
+      sidewalkPct:
+        route.totalDist > 0
+          ? Math.round((sidewalkDist / route.totalDist) * 100)
+          : 0,
+      unpavedPct:
+        route.totalDist > 0
+          ? Math.round((unpavedDist / route.totalDist) * 100)
+          : 0,
       transitStopsNearby: Math.min(transitStopCount, 50),
       cctvCamerasNearby: Math.min(cctvNearCount, 50),
       roadNameChanges,
@@ -580,24 +867,28 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
       routeIndex: idx,
       isSafest: idx === 0,
       overview_polyline: { points: encodePolyline(polyline) },
-      legs: [{
-        distance: {
-          text: route.totalDist >= 1000
-            ? `${(route.totalDist / 1000).toFixed(1)} km`
-            : `${Math.round(route.totalDist)} m`,
-          value: Math.round(route.totalDist),
+      legs: [
+        {
+          distance: {
+            text:
+              route.totalDist >= 1000
+                ? `${(route.totalDist / 1000).toFixed(1)} km`
+                : `${Math.round(route.totalDist)} m`,
+            value: Math.round(route.totalDist),
+          },
+          duration: {
+            text:
+              durationSec >= 3600
+                ? `${Math.floor(durationSec / 3600)} hr ${Math.round((durationSec % 3600) / 60)} mins`
+                : `${Math.round(durationSec / 60)} mins`,
+            value: durationSec,
+          },
+          start_location: { lat: oLatV, lng: oLngV },
+          end_location: { lat: dLatV, lng: dLngV },
+          steps: [],
         },
-        duration: {
-          text: durationSec >= 3600
-            ? `${Math.floor(durationSec / 3600)} hr ${Math.round((durationSec % 3600) / 60)} mins`
-            : `${Math.round(durationSec / 60)} mins`,
-          value: durationSec,
-        },
-        start_location: { lat: oLatV, lng: oLngV },
-        end_location: { lat: dLatV, lng: dLngV },
-        steps: [],
-      }],
-      summary: idx === 0 ? 'Safest Route' : `Route ${idx + 1}`,
+      ],
+      summary: idx === 0 ? "Safest Route" : `Route ${idx + 1}`,
       safety: {
         score: score100,
         label,
@@ -623,10 +914,12 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
   const responseRoutes = routes.slice(0, Math.max(minRoutes, routes.length));
 
   const elapsed = Date.now() - startTime;
-  console.log(`[safe-routes] 🏁 Done in ${elapsed}ms (corridor:${phase1Time}ms, data:${dataTime}ms, graph:${graphTime}ms, A*:${pathfindTime}ms, recorrection:${recorrectionMs}ms) — ${responseRoutes.length} routes, safest: ${responseRoutes[0]?.safety?.score}`);
+  console.log(
+    `[safe-routes] 🏁 Done in ${elapsed}ms (corridor:${phase1Time}ms, data:${dataTime}ms, graph:${graphTime}ms, A*:${pathfindTime}ms, recorrection:${recorrectionMs}ms) — ${responseRoutes.length} routes, safest: ${responseRoutes[0]?.safety?.score}`,
+  );
 
   return {
-    status: 'OK',
+    status: "OK",
     routes: responseRoutes,
     meta: {
       straightLineDistanceKm: Math.round(straightLineKm * 10) / 10,
@@ -668,8 +961,26 @@ async function computeSafeRoutes(oLatV, oLngV, dLatV, dLngV, straightLineDist, s
  */
 const NEARBY_M = 30;
 
-function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, transitNodes, nodeDegree, lightNodes, placeNodes, crimeNodes) {
-  const pois = { cctv: [], transit: [], deadEnds: [], lights: [], places: [], crimes: [] };
+function collectRoutePOIs(
+  routePath,
+  routeEdges,
+  allEdges,
+  osmNodes,
+  cctvNodes,
+  transitNodes,
+  nodeDegree,
+  lightNodes,
+  placeNodes,
+  crimeNodes,
+) {
+  const pois = {
+    cctv: [],
+    transit: [],
+    deadEnds: [],
+    lights: [],
+    places: [],
+    crimes: [],
+  };
   const seen = new Set();
 
   // Collect dead-end nodes on the route
@@ -707,7 +1018,10 @@ function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, 
   for (const cam of cctvNodes) {
     if (isNearRoute(cam.lat, cam.lng)) {
       const key = `cc:${cam.lat.toFixed(5)},${cam.lng.toFixed(5)}`;
-      if (!seen.has(key)) { seen.add(key); pois.cctv.push({ lat: cam.lat, lng: cam.lng }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        pois.cctv.push({ lat: cam.lat, lng: cam.lng });
+      }
     }
   }
 
@@ -715,28 +1029,37 @@ function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, 
   for (const ts of transitNodes) {
     if (isNearRoute(ts.lat, ts.lng)) {
       const key = `tr:${ts.lat.toFixed(5)},${ts.lng.toFixed(5)}`;
-      if (!seen.has(key)) { seen.add(key); pois.transit.push({ lat: ts.lat, lng: ts.lng }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        pois.transit.push({ lat: ts.lat, lng: ts.lng });
+      }
     }
   }
 
   // Collect street lights near route
-  for (const lamp of (lightNodes || [])) {
+  for (const lamp of lightNodes || []) {
     if (isNearRoute(lamp.lat, lamp.lng)) {
       const key = `lt:${lamp.lat.toFixed(5)},${lamp.lng.toFixed(5)}`;
-      if (!seen.has(key)) { seen.add(key); pois.lights.push({ lat: lamp.lat, lng: lamp.lng }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        pois.lights.push({ lat: lamp.lat, lng: lamp.lng });
+      }
     }
   }
 
   // Collect places near route (with name, open status, and hours)
-  for (const pl of (placeNodes || [])) {
+  for (const pl of placeNodes || []) {
     if (isNearRoute(pl.lat, pl.lng)) {
       const key = `pl:${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}`;
       if (!seen.has(key)) {
         seen.add(key);
         pois.places.push({
-          lat: pl.lat, lng: pl.lng,
-          name: pl.name, amenity: pl.amenity,
-          open: pl.open, nextChange: pl.nextChange,
+          lat: pl.lat,
+          lng: pl.lng,
+          name: pl.name,
+          amenity: pl.amenity,
+          open: pl.open,
+          nextChange: pl.nextChange,
           opening_hours: pl.opening_hours,
         });
       }
@@ -744,10 +1067,13 @@ function collectRoutePOIs(routePath, routeEdges, allEdges, osmNodes, cctvNodes, 
   }
 
   // Collect crimes near route
-  for (const cr of (crimeNodes || [])) {
+  for (const cr of crimeNodes || []) {
     if (isNearRoute(cr.lat, cr.lng)) {
       const key = `cr:${cr.lat.toFixed(5)},${cr.lng.toFixed(5)}`;
-      if (!seen.has(key)) { seen.add(key); pois.crimes.push({ lat: cr.lat, lng: cr.lng, category: cr.category }); }
+      if (!seen.has(key)) {
+        seen.add(key);
+        pois.crimes.push({ lat: cr.lat, lng: cr.lng, category: cr.category });
+      }
     }
   }
 
