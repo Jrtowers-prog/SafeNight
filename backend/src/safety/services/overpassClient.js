@@ -36,6 +36,10 @@ const OSM_REFERER =
 
 let serverIdx = 0;
 
+// Safety data levels: "standard" = roads + lights only, "extra" = full dataset.
+const SAFETY_LEVEL_STANDARD = "standard";
+const SAFETY_LEVEL_EXTRA = "extra";
+
 // ── Data-layer cache (much longer than route cache) ─────────────────────────
 const dataCache = new Map();
 const DATA_CACHE_TTL = 30 * 60 * 1000; // 30 minutes — OSM doesn't change often
@@ -67,6 +71,21 @@ function candidateServers() {
     (s) => (serverCooldownUntil.get(s) || 0) <= Date.now(),
   );
   return healthy.length > 0 ? healthy : ordered;
+}
+
+/**
+ * Road and street-light sets shared by both safety levels, so the walkable
+ * highway list can't drift between them.
+ */
+function roadsAndLightsSets(b) {
+  return `
+    (
+      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
+    )->.roads;
+    (
+      node["highway"="street_lamp"](${b});
+      way["lit"="yes"](${b});
+    )->.lights;`;
 }
 
 /**
@@ -159,7 +178,11 @@ function toBBoxString(bbox) {
   return `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
 }
 
-async function fetchSafetyDataSplitFallback(bbox, signal = null) {
+async function fetchSafetyDataSplitFallback(
+  bbox,
+  signal = null,
+  level = SAFETY_LEVEL_EXTRA,
+) {
   const b = toBBoxString(bbox);
 
   const roadQuery = `
@@ -216,13 +239,16 @@ async function fetchSafetyDataSplitFallback(bbox, signal = null) {
   };
 
   // Roads are required for routing. Other datasets are safety enrichments and
-  // can degrade to empty on temporary provider failures.
+  // can degrade to empty on temporary provider failures. Standard level skips
+  // CCTV, places and transit entirely.
+  const skipped = { elements: [] };
+  const standard = level === SAFETY_LEVEL_STANDARD;
   const [roads, lights, cctv, places, transit] = await Promise.all([
     safeQuery("roads", roadQuery, { optional: false }),
     safeQuery("lights", lightsQuery),
-    safeQuery("cctv", cctvQuery),
-    safeQuery("places", placesQuery),
-    safeQuery("transit", transitQuery),
+    standard ? skipped : safeQuery("cctv", cctvQuery),
+    standard ? skipped : safeQuery("places", placesQuery),
+    standard ? skipped : safeQuery("transit", transitQuery),
   ]);
 
   return {
@@ -245,10 +271,14 @@ async function fetchSafetyDataSplitFallback(bbox, signal = null) {
  *
  * Returns pre-split categorised data.
  * This replaces the old 4-query approach and cuts latency ~70%.
+ *
+ * `level` selects how much data is fetched:
+ *   • "extra" (default) — everything above
+ *   • "standard"        — roads + street lights only (faster, less data)
  */
 async function fetchAllSafetyData(bbox, options = {}) {
-  const { signal = null } = options;
-  const key = dataCacheKey(bbox);
+  const { signal = null, level = SAFETY_LEVEL_EXTRA } = options;
+  const key = `${dataCacheKey(bbox)}|${level}`;
   const cached = dataCache.get(key);
   if (cached && Date.now() - cached.timestamp < DATA_CACHE_TTL) {
     console.log("[overpass] 📋 Data cache hit");
@@ -259,14 +289,7 @@ async function fetchAllSafetyData(bbox, options = {}) {
   const b = `${south},${west},${north},${east}`;
 
   // Single combined Overpass query with named sets
-  const query = `
-    (
-      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
-    )->.roads;
-    (
-      node["highway"="street_lamp"](${b});
-      way["lit"="yes"](${b});
-    )->.lights;
+  const extraQuery = `${roadsAndLightsSets(b)}
     (
       node["man_made"="surveillance"](${b});
     )->.cctv;
@@ -294,7 +317,21 @@ async function fetchAllSafetyData(bbox, options = {}) {
     .transit out body;
   `;
 
-  console.log("[overpass] 🌐 Fetching ALL safety data in single query...");
+  const standardQuery = `${roadsAndLightsSets(b)}
+    .roads out body;
+    .roads >;
+    out skel qt;
+    .lights out body;
+    .lights >;
+    out skel qt;
+  `;
+
+  const query =
+    level === SAFETY_LEVEL_STANDARD ? standardQuery : extraQuery;
+
+  console.log(
+    `[overpass] 🌐 Fetching ${level} safety data in single query...`,
+  );
   const t0 = Date.now();
   let result;
   try {
@@ -303,6 +340,16 @@ async function fetchAllSafetyData(bbox, options = {}) {
       `[overpass] ✅ Single query: ${raw.elements.length} elements in ${Date.now() - t0}ms`,
     );
     result = splitElements(raw.elements);
+    // Standard level is strict: a lit way that also has an amenity tag must not
+    // leak into places, CCTV or transit.
+    if (level === SAFETY_LEVEL_STANDARD) {
+      result = {
+        ...result,
+        cctv: { elements: [] },
+        places: { elements: [] },
+        transit: { elements: [] },
+      };
+    }
   } catch (err) {
     const msg = String(err?.message || err);
     const shouldFallback =
@@ -316,7 +363,7 @@ async function fetchAllSafetyData(bbox, options = {}) {
     console.warn(
       `[overpass] ⚠️ Single query failed (${msg.slice(0, 160)}). Falling back to split queries.`,
     );
-    const splitData = await fetchSafetyDataSplitFallback(bbox, signal);
+    const splitData = await fetchSafetyDataSplitFallback(bbox, signal, level);
     const totalElements =
       (splitData.roads.elements?.length || 0) +
       (splitData.lights.elements?.length || 0) +
@@ -473,6 +520,8 @@ async function fetchTransitStops(bbox) {
 }
 
 module.exports = {
+  SAFETY_LEVEL_STANDARD,
+  SAFETY_LEVEL_EXTRA,
   overpassQuery,
   fetchAllSafetyData,
   fetchRoadNetworkOnly,
