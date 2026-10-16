@@ -1,21 +1,31 @@
-name: Publish backend Docker images
+name: Package and publish backend Docker images
 
 on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/docker-publish-backend.yml"
   push:
     branches: [main]
     paths:
-      - 'backend/**'
-      - '.github/workflows/docker-publish-backend.yml'
+      - "backend/**"
+      - ".github/workflows/docker-publish-backend.yml"
   workflow_dispatch:
     inputs:
+      publish:
+        description: "Push images to Docker Hub"
+        required: true
+        default: true
+        type: boolean
       push_latest:
-        description: 'Also push latest tag'
+        description: "Also push latest tag"
         required: true
         default: true
         type: boolean
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: docker-publish-${{ github.ref }}
@@ -45,10 +55,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Decide whether to publish
+        id: mode
+        run: |
+          should_push=false
+          if [ "${{ github.event_name }}" = "push" ]; then
+            should_push=true
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
+            should_push=true
+          fi
+          echo "should_push=$should_push" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Validate Docker Hub credentials
+        if: steps.mode.outputs.should_push == 'true'
         run: |
           if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
             echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets are required."
@@ -56,12 +78,14 @@ jobs:
           fi
 
       - name: Log in to Docker Hub
+        if: steps.mode.outputs.should_push == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker metadata
+        if: steps.mode.outputs.should_push == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -71,7 +95,26 @@ jobs:
             type=ref,event=branch
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.push_latest == true) }}
 
+      - name: Build and package ${{ matrix.service.name }}
+        if: steps.mode.outputs.should_push != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: ${{ matrix.service.dockerfile }}
+          push: false
+          tags: safenight-${{ matrix.service.name }}:ci-${{ github.sha }}
+          outputs: type=docker,dest=/tmp/safenight-${{ matrix.service.name }}.tar
+
+      - name: Upload packaged image artifact (${{ matrix.service.name }})
+        if: steps.mode.outputs.should_push != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: safenight-${{ matrix.service.name }}-image-${{ github.sha }}
+          path: /tmp/safenight-${{ matrix.service.name }}.tar
+          if-no-files-found: error
+
       - name: Build and push ${{ matrix.service.name }}
+        if: steps.mode.outputs.should_push == 'true'
         uses: docker/build-push-action@v6
         with:
           context: backend

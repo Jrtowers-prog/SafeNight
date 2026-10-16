@@ -1,3 +1,4 @@
+
 /**
  * SearchBar — Origin + Destination inputs with prediction dropdown.
  *
@@ -21,7 +22,9 @@ import {
 
 import type { UseAutoPlaceSearchReturn } from "@/src/hooks/useAutoPlaceSearch";
 import type { SavedPlace, SaveResult } from "@/src/hooks/useSavedPlaces";
+import type { SafetyLevel } from "@/src/services/safeRoutes";
 import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/geo";
+import { SafetyLevelToggle } from "./SafetyLevelToggle";
 import { SavedPlaces } from "./SavedPlaces";
 
 const CATEGORY_CHIP_DEFINITIONS: Array<{
@@ -100,6 +103,9 @@ export interface SearchBarProps {
   onSavedPlaceToast?: (msg: string, icon?: string) => void;
   /** When true, suppresses prediction/candidate dropdown cards below inputs. */
   hidePredictionsDropdown?: boolean;
+  /** Safety data level for route search (Extra = default) */
+  safetyLevel?: SafetyLevel;
+  onSafetyLevelChange?: (level: SafetyLevel) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -131,6 +137,8 @@ export function SearchBar({
   onRemoveSavedPlace,
   onSavedPlaceToast,
   hidePredictionsDropdown = false,
+  safetyLevel = 'extra',
+  onSafetyLevelChange,
 }: SearchBarProps) {
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
@@ -143,6 +151,7 @@ export function SearchBar({
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const focusRequestIdRef = useRef(0);
   const lastFocusedFieldRef = useRef<"origin" | "destination" | null>(null);
+  const pendingOriginFocusRef = useRef(false);
   const suppressBlurRef = useRef(false);
 
   const handleBlur = useCallback(() => {
@@ -216,6 +225,32 @@ export function SearchBar({
     },
     [cancelBlurTimer, cancelScheduledFocus, setPinMode],
   );
+
+  // One handler for the whole origin field, so clicks on its padding work
+  // the same as clicks on the text itself.
+  const activateOrigin = useCallback(() => {
+    if (onGuestTap) {
+      onGuestTap();
+      return;
+    }
+    if (isUsingCurrentLocation) {
+      // The text input is not mounted yet; focus it once it appears.
+      pendingOriginFocusRef.current = true;
+      setIsUsingCurrentLocation(false);
+      return;
+    }
+    // Focus directly. Going through InteractionManager here never ran on web
+    // while the sidebar animates, so the field was never focused.
+    cancelScheduledFocus();
+    focusFieldImmediately("origin");
+  }, [onGuestTap, isUsingCurrentLocation, cancelScheduledFocus, focusFieldImmediately]);
+
+  useEffect(() => {
+    if (!isUsingCurrentLocation && pendingOriginFocusRef.current) {
+      pendingOriginFocusRef.current = false;
+      focusFieldImmediately("origin");
+    }
+  }, [isUsingCurrentLocation, focusFieldImmediately]);
 
   useEffect(
     () => () => {
@@ -351,28 +386,16 @@ export function SearchBar({
         <View style={[styles.card, embedded && styles.cardEmbedded]}>
           {/* Origin Input */}
           <View style={styles.inputRow}>
-            <View style={styles.inputIconWrap}>
+            <Pressable style={styles.inputIconWrap} onPress={activateOrigin}>
               <View style={styles.iconDot} />
-            </View>
+            </Pressable>
             <Pressable
               style={[
                 styles.inputFieldWrap,
                 focusedField === "origin" && styles.inputFieldWrapFocused,
               ]}
               hitSlop={4}
-              onPress={() => {
-                if (onGuestTap) {
-                  onGuestTap();
-                  return;
-                }
-                if (!isUsingCurrentLocation) {
-                  if (Platform.OS === "android") {
-                    focusFieldImmediately("origin");
-                  } else {
-                    scheduleFieldFocus("origin", 40);
-                  }
-                }
-              }}
+              onPress={activateOrigin}
             >
               {isUsingCurrentLocation ? (
                 <Pressable
@@ -380,18 +403,7 @@ export function SearchBar({
                     styles.inputField,
                     { flexDirection: "row", alignItems: "center", gap: 6 },
                   ]}
-                  onPress={() => {
-                    if (onGuestTap) {
-                      onGuestTap();
-                      return;
-                    }
-                    setIsUsingCurrentLocation(false);
-                    if (Platform.OS === "android") {
-                      requestAnimationFrame(() => focusFieldImmediately("origin"));
-                    } else {
-                      scheduleFieldFocus("origin", 40);
-                    }
-                  }}
+                  onPress={activateOrigin}
                   accessibilityRole="button"
                 >
                   <Ionicons
@@ -504,6 +516,14 @@ export function SearchBar({
               <View style={styles.iconConnector} />
             </View>
             <View style={styles.inputDivider} />
+            {onSafetyLevelChange && (
+              <View style={styles.magicSlot}>
+                <SafetyLevelToggle
+                  value={safetyLevel}
+                  onChange={onSafetyLevelChange}
+                />
+              </View>
+            )}
           </View>
 
           {/* Destination Input */}
@@ -522,11 +542,8 @@ export function SearchBar({
                   onGuestTap();
                   return;
                 }
-                if (Platform.OS === "android") {
-                  focusFieldImmediately("destination");
-                } else {
-                  scheduleFieldFocus("destination", 40);
-                }
+                cancelScheduledFocus();
+                focusFieldImmediately("destination");
               }}
             >
               <TextInput
@@ -874,10 +891,13 @@ const styles = StyleSheet.create({
   },
   cardEmbedded: {
     maxWidth: "100%" as any,
+    backgroundColor: "transparent",
     borderRadius: 0,
     boxShadow: "none",
     elevation: 0,
     overflow: "visible",
+    paddingTop: 0,
+    paddingBottom: 0,
   } as any,
   inputRow: {
     flexDirection: "row",
@@ -888,7 +908,9 @@ const styles = StyleSheet.create({
       Platform.OS === "android" ? 4 : Platform.OS === "web" ? 0 : 2,
   },
   inputIconWrap: {
-    width: 20,
+    // Holds the gap that used to be a margin on the field, so every pixel
+    // of the field's own box is part of its tap area.
+    width: 28,
     alignItems: "center",
   },
   iconDot: {
@@ -916,21 +938,24 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    marginLeft: Platform.OS === "android" ? 10 : 8,
-    backgroundColor: "#f9fafb",
-    borderRadius: 10,
+    marginLeft: 0,
+    backgroundColor: "rgba(255, 255, 255, 0.72)",
+    borderRadius: Platform.OS === "web" ? 16 : 12,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: "rgba(255, 255, 255, 0.95)",
     paddingHorizontal:
-      Platform.OS === "android" ? 10 : Platform.OS === "web" ? 12 : 10,
+      Platform.OS === "android" ? 12 : Platform.OS === "web" ? 14 : 10,
     paddingVertical:
-      Platform.OS === "android" ? 8 : Platform.OS === "web" ? 10 : 7,
+      Platform.OS === "android" ? 9 : Platform.OS === "web" ? 11 : 7,
+    ...(Platform.OS === "web"
+      ? { boxShadow: "0 2px 10px rgba(15, 23, 42, 0.08)" }
+      : {}),
   },
   inputFieldWrapFocused: {
-    borderColor: "#1570ef",
-    backgroundColor: "#ffffff",
+    borderColor: "rgba(21, 112, 239, 0.35)",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     ...(Platform.OS === "web"
-      ? { boxShadow: "0 0 0 2px rgba(21, 112, 239, 0.15)" }
+      ? { boxShadow: "0 4px 14px rgba(21, 112, 239, 0.12)" }
       : Platform.OS === "android"
         ? {
             shadowColor: "#1570ef",
@@ -961,9 +986,9 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
   mapPinButton: {
-    padding: 5,
-    borderRadius: 6,
-    backgroundColor: "#f2f4f7",
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.8)",
   },
   mapPinButtonActive: {
     backgroundColor: "#e8f0fe",
@@ -983,11 +1008,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: Platform.OS === "web" ? 10 : 8,
     marginVertical: Platform.OS === "web" ? 0 : 2,
   },
+  magicSlot: {
+    marginLeft: 'auto',
+    paddingLeft: 8,
+  },
   swapButton: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#f2f4f7",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.85)",
+    boxShadow: "0 1px 4px rgba(15, 23, 42, 0.12)",
     alignItems: "center",
     justifyContent: "center",
   },

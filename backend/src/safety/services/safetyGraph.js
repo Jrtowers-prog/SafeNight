@@ -1,3 +1,4 @@
+
 /**
  * safetyGraph.js — Optimised safety-first walking graph + pathfinding.
  *
@@ -28,6 +29,7 @@
 
 const { haversine, fastDistance, buildSpatialGrid, findNearby, countNearby } = require('./geo');
 const { scoreFromCache } = require('./lightsCacheClient');
+const { SAFETY_LEVEL_STANDARD, SAFETY_LEVEL_EXTRA } = require('./safetyLevels');
 const opening_hours_lib = require('opening_hours');
 
 const ENABLE_PLACE_OPENING_HOURS_PARSE = process.env.SAFE_ROUTES_PARSE_PLACE_OPENING_HOURS === '1';
@@ -69,7 +71,21 @@ const WALKABLE_HIGHWAYS = new Set(Object.keys(ROAD_TYPE_SCORES));
 
 // ── Time-adaptive weights ───────────────────────────────────────────────────
 // Weights shift based on time of day (late night = crime matters more)
-function getWeights(hour) {
+// Standard level has no CCTV or place data, so those weights are dropped and the
+// remaining weights are rescaled to sum to 1 (keeps scores on the same scale).
+function getWeights(hour, level = SAFETY_LEVEL_EXTRA) {
+  const base = getBaseWeights(hour);
+  if (level !== SAFETY_LEVEL_STANDARD) return base;
+
+  const { cctv, openPlaces, ...rest } = base;
+  const total = Object.values(rest).reduce((sum, w) => sum + w, 0);
+  const scaled = Object.fromEntries(
+    Object.entries(rest).map(([k, w]) => [k, w / total]),
+  );
+  return { ...scaled, cctv: 0, openPlaces: 0 };
+}
+
+function getBaseWeights(hour) {
   // hour = 0–23
   const h = typeof hour === 'number' && hour >= 0 && hour <= 23 ? hour : new Date().getHours();
   const isLateNight = h >= 0 && h < 5;   // midnight–5am
@@ -241,7 +257,7 @@ async function buildGraph(roadData, lightData, cctvData, placeData, transitData,
     ? options.shouldCancel
     : null;
   const hour = options.hour != null ? options.hour : new Date().getHours();
-  const weights = getWeights(hour);
+  const weights = getWeights(hour, options?.level);
 
   // 1. Index all OSM nodes by ID
   const osmNodes = new Map();

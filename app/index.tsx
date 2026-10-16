@@ -2054,6 +2054,8 @@ export default function HomeScreen() {
             }
             searchBar={
               <SearchBar
+                safetyLevel={h.safetyLevel}
+                onSafetyLevelChange={h.setSafetyLevel}
                 topInset={0}
                 location={h.location}
                 isUsingCurrentLocation={h.isUsingCurrentLocation}
@@ -2297,6 +2299,8 @@ export default function HomeScreen() {
 
             {/* MobileWebSearchBar — collapsible pill */}
             <MobileWebSearchBar
+              safetyLevel={h.safetyLevel}
+              onSafetyLevelChange={h.setSafetyLevel}
               location={h.location}
               isUsingCurrentLocation={h.isUsingCurrentLocation}
               setIsUsingCurrentLocation={h.setIsUsingCurrentLocation}
@@ -2588,6 +2592,8 @@ export default function HomeScreen() {
         {/* ── Search bar (mobile only — web uses sidebar) ── */}
         {!isWeb && !h.isNavActive && (
           <MobileWebSearchBar
+            safetyLevel={h.safetyLevel}
+            onSafetyLevelChange={h.setSafetyLevel}
             topInset={insets.top + webBannerOffset}
             location={h.location}
             isUsingCurrentLocation={h.isUsingCurrentLocation}

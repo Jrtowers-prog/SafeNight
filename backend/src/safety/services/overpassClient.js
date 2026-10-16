@@ -1,3 +1,4 @@
+
 /**
  * overpassClient.js — Optimised Overpass API client.
  *
@@ -12,6 +13,7 @@
  */
 
 const DEFAULT_OVERPASS_SERVERS = [
+  "https://overpass.openstreetmap.fr/api/interpreter",
   "https://overpass-api.de/api/interpreter",
   "https://lz4.overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
@@ -79,6 +81,8 @@ const endpointHealth = new Map();
 const backgroundRefreshInflight = new Map();
 const liveFetchInProgress = new Set();
 const liveFetchPromises = new Set();
+
+const { SAFETY_LEVEL_STANDARD, SAFETY_LEVEL_EXTRA } = require("./safetyLevels");
 
 // ── Data-layer cache (much longer than route cache) ─────────────────────────
 const DATA_CACHE_TTL = 30 * 60 * 1000; // 30 minutes — OSM doesn't change often
@@ -448,6 +452,7 @@ async function fetchSafetyDataSplitFallback(
   bbox,
   signal = null,
   requestBudget = null,
+  level = SAFETY_LEVEL_EXTRA,
 ) {
   const b = toBBoxString(bbox);
 
@@ -505,6 +510,10 @@ async function fetchSafetyDataSplitFallback(
 
   const optionalResults = await Promise.all(
     optionalQueries.map(async ({ name, query }) => {
+      // Standard level fetches only roads and lights.
+      if (level === SAFETY_LEVEL_STANDARD && name !== "lights") {
+        return [name, { elements: [] }];
+      }
       try {
         const data = await overpassQuery(query, 30, signal, requestBudget);
         return [name, data];
@@ -544,8 +553,9 @@ async function fetchSafetyDataSplitFallback(
  * This replaces the old 4-query approach and cuts latency ~70%.
  */
 async function fetchAllSafetyData(bbox, options = {}) {
-  const { signal = null, onSourceMeta = null } = options;
-  const key = dataCacheKey(bbox);
+  const { signal = null, onSourceMeta = null, level = SAFETY_LEVEL_EXTRA } = options;
+  const standard = level === SAFETY_LEVEL_STANDARD;
+  const key = `${dataCacheKey(bbox)}|${level}`;
   const cacheEntry = await dataCacheStore.getWithMeta(key, {
     allowStale: SAFE_ROUTES_ALLOW_STALE_CACHE,
     maxStaleMs: OVERPASS_MAX_STALE_MS,
@@ -566,7 +576,7 @@ async function fetchAllSafetyData(bbox, options = {}) {
   const b = `${south},${west},${north},${east}`;
 
   // Single combined Overpass query with named sets
-  const query = `
+  const extraQuery = `
     (
       way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
     )->.roads;
@@ -601,6 +611,24 @@ async function fetchAllSafetyData(bbox, options = {}) {
     .transit out body;
   `;
 
+  // Standard level: roads + lights only (faster, less data).
+  const standardQuery = `
+    (
+      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
+    )->.roads;
+    (
+      node["highway"="street_lamp"](${b});
+      way["lit"="yes"](${b});
+    )->.lights;
+    .roads out body;
+    .roads >;
+    out skel qt;
+    .lights out body;
+    .lights >;
+    out skel qt;
+  `;
+  const query = standard ? standardQuery : extraQuery;
+
   const fetchAndCacheLiveData = (liveSignal = signal) => {
     const fetchPromise = (async () => {
       liveFetchInProgress.add(key);
@@ -619,6 +647,16 @@ async function fetchAllSafetyData(bbox, options = {}) {
             `[overpass] ✅ Single query: ${raw.elements.length} elements in ${Date.now() - t0}ms`,
           );
           result = splitElements(raw.elements);
+          // Standard level is strict: no CCTV, places or transit even if the
+          // combined response carried them.
+          if (standard) {
+            result = {
+              ...result,
+              cctv: { elements: [] },
+              places: { elements: [] },
+              transit: { elements: [] },
+            };
+          }
         } catch (err) {
           const msg = String(err?.message || "");
           const shouldFallback =
@@ -660,6 +698,7 @@ async function fetchAllSafetyData(bbox, options = {}) {
               bbox,
               liveSignal,
               splitBudget,
+              level,
             );
           } finally {
             if (createdSplitBudget) {
@@ -991,6 +1030,8 @@ async function __waitForInflightForTests() {
 }
 
 module.exports = {
+  SAFETY_LEVEL_STANDARD,
+  SAFETY_LEVEL_EXTRA,
   overpassQuery,
   fetchAllSafetyData,
   fetchRoadNetworkOnly,

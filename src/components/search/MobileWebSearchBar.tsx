@@ -1,3 +1,4 @@
+
 /**
  * MobileWebSearchBar — collapsible search.
  *
@@ -28,7 +29,9 @@ import {
 
 import type { UseAutoPlaceSearchReturn } from "@/src/hooks/useAutoPlaceSearch";
 import type { SavedPlace, SaveResult } from "@/src/hooks/useSavedPlaces";
+import type { SafetyLevel } from "@/src/services/safeRoutes";
 import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/geo";
+import { SafetyLevelToggle } from "./SafetyLevelToggle";
 import { SavedPlaces } from "./SavedPlaces";
 
 const CATEGORY_CHIP_DEFINITIONS: {
@@ -96,6 +99,9 @@ export interface MobileWebSearchBarProps {
   ) => Promise<SaveResult> | SaveResult;
   onRemoveSavedPlace?: (id: string) => void;
   onSavedPlaceToast?: (msg: string, icon?: string) => void;
+  /** Safety data level for route search (Extra = default) */
+  safetyLevel?: SafetyLevel;
+  onSafetyLevelChange?: (level: SafetyLevel) => void;
   /** Optional callback to report expanded/collapsed state to parent overlays. */
   onExpandedChange?: (expanded: boolean) => void;
   onContainerLayout?: (metrics: { y: number; height: number; bottom: number }) => void;
@@ -131,6 +137,8 @@ export function MobileWebSearchBar({
   onSavePlace,
   onRemoveSavedPlace,
   onSavedPlaceToast,
+  safetyLevel = 'extra',
+  onSafetyLevelChange,
   onExpandedChange,
   onContainerLayout,
   onEffectiveBottomChange,
@@ -644,6 +652,11 @@ export function MobileWebSearchBar({
               >
                 <Ionicons name="swap-vertical" size={18} color="#667085" />
               </Pressable>
+              {onSafetyLevelChange && (
+                <View style={styles.magicSlot}>
+                  <SafetyLevelToggle value={safetyLevel} onChange={onSafetyLevelChange} />
+                </View>
+              )}
             </View>
 
             {/* Origin */}
@@ -1178,6 +1191,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#f3f4f6",
     alignItems: "center",
     justifyContent: "center",
+  },
+  magicSlot: {
+    marginLeft: 8,
   },
 
   // ── Input rows ──

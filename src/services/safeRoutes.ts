@@ -617,15 +617,20 @@ const CACHE_TTL = 5 * 60 * 1000;
 function cacheKey(
   origin: LatLng,
   dest: LatLng,
-  waypoint?: LatLng | null,
+  waypoint: LatLng | null | undefined,
+  safetyLevel: SafetyLevel,
 ): string {
   const base = `${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)}->${dest.latitude.toFixed(4)},${dest.longitude.toFixed(4)}`;
-  return waypoint
+  const withWaypoint = waypoint
     ? `${base}@${waypoint.latitude.toFixed(4)},${waypoint.longitude.toFixed(4)}`
     : base;
+  return `${withWaypoint}|${safetyLevel}`;
 }
 
 // ── Main function ────────────────────────────────────────────────────────────
+
+/** "standard" = roads + lights only (faster); "extra" = full safety data. */
+export type SafetyLevel = "standard" | "extra";
 
 /**
  * Fetch 3–5 safety-ranked walking routes from the backend.
@@ -639,10 +644,11 @@ export async function fetchSafeRoutes(
   subscriptionTier: string = "free",
   maxDistanceKmOverride?: number,
   waypoint?: LatLng | null,
+  safetyLevel: SafetyLevel = "extra",
 ): Promise<SafeRoutesResponse> {
   await subscriptionApi.ensureFeatureAllowed("route_search");
 
-  const key = cacheKey(origin, destination, waypoint);
+  const key = cacheKey(origin, destination, waypoint, safetyLevel);
   const cached = cache.get(key);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     console.log("[safeRoutes] 📋 Cache hit");
@@ -659,7 +665,8 @@ export async function fetchSafeRoutes(
     `${BACKEND_BASE}/api/safe-routes?` +
     `origin_lat=${origin.latitude}&origin_lng=${origin.longitude}` +
     `&dest_lat=${destination.latitude}&dest_lng=${destination.longitude}` +
-    `&max_distance=${maxDistanceKm}${waypointParam}`;
+    `&max_distance=${maxDistanceKm}${waypointParam}` +
+    `&safety_level=${safetyLevel}`;
 
   if (waypoint) {
     console.log(
