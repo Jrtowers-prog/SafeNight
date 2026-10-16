@@ -12,9 +12,8 @@
  */
 
 const DEFAULT_OVERPASS_SERVERS = [
+  "https://overpass.openstreetmap.fr/api/interpreter",
   "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ];
 
 const OVERPASS_SERVERS = (process.env.OVERPASS_SERVERS || "")
@@ -46,8 +45,32 @@ function dataCacheKey(bbox) {
   return `${r(bbox.south)},${r(bbox.west)},${r(bbox.north)},${r(bbox.east)}`;
 }
 
+// A server that fails is skipped for this long, so searches don't wait on it.
+const SERVER_COOLDOWN_MS = 5 * 60 * 1000;
+const serverCooldownUntil = new Map();
+
+function markServerDown(server) {
+  serverCooldownUntil.set(server, Date.now() + SERVER_COOLDOWN_MS);
+}
+
 /**
- * Run an Overpass QL query with automatic retry & server rotation.
+ * Servers to try, in rotation order, skipping any in cooldown.
+ * If every server is cooling down, try them all anyway.
+ */
+function candidateServers() {
+  const n = OVERPASS_SERVERS.length;
+  const ordered = Array.from(
+    { length: n },
+    (_, i) => (serverIdx + i) % n,
+  ).map((i) => OVERPASS_SERVERS[i]);
+  const healthy = ordered.filter(
+    (s) => (serverCooldownUntil.get(s) || 0) <= Date.now(),
+  );
+  return healthy.length > 0 ? healthy : ordered;
+}
+
+/**
+ * Run an Overpass QL query with automatic retry, server rotation & cooldown.
  */
 async function overpassQuery(query, timeout = 90, signal = null) {
   const fullQuery = `[out:json][timeout:${timeout}];${query}`;
@@ -61,9 +84,11 @@ async function overpassQuery(query, timeout = 90, signal = null) {
   };
   if (OSM_REFERER) requestHeaders.Referer = OSM_REFERER;
 
-  for (let attempt = 0; attempt < OVERPASS_SERVERS.length; attempt++) {
-    const server =
-      OVERPASS_SERVERS[(serverIdx + attempt) % OVERPASS_SERVERS.length];
+  const candidates = candidateServers();
+  // One attempt per server, but a single configured server still gets 3 retries.
+  const maxAttempts = candidates.length > 1 ? candidates.length : 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const server = candidates[attempt % candidates.length];
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), (timeout + 15) * 1000);
@@ -82,6 +107,7 @@ async function overpassQuery(query, timeout = 90, signal = null) {
 
       if (resp.status === 403 || resp.status === 429 || resp.status >= 500) {
         const snippet = (await resp.text()).slice(0, 220);
+        markServerDown(server);
         lastError = new Error(
           `Overpass ${server} returned ${resp.status}: ${snippet}`,
         );
@@ -96,8 +122,18 @@ async function overpassQuery(query, timeout = 90, signal = null) {
         throw new Error(`Overpass error ${resp.status}: ${text.slice(0, 200)}`);
       }
 
-      const data = await resp.json();
-      serverIdx = (serverIdx + attempt) % OVERPASS_SERVERS.length;
+      // Some mirrors return an HTML error page with status 200.
+      const text = await resp.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        markServerDown(server);
+        throw new Error(`Overpass ${server} returned non-JSON response`);
+      }
+
+      serverCooldownUntil.delete(server);
+      serverIdx = OVERPASS_SERVERS.indexOf(server);
       return data;
     } catch (err) {
       lastError = err;
@@ -107,7 +143,11 @@ async function overpassQuery(query, timeout = 90, signal = null) {
           abortErr.name = "AbortError";
           throw abortErr;
         }
+        markServerDown(server);
         lastError = new Error(`Overpass ${server} timed out`);
+      } else if (err instanceof TypeError) {
+        // fetch() throws TypeError on DNS / connection failures.
+        markServerDown(server);
       }
       await new Promise((resolve) => setTimeout(resolve, 300 + attempt * 250));
     }
@@ -163,12 +203,26 @@ async function fetchSafetyDataSplitFallback(bbox, signal = null) {
     out body;
   `;
 
+  const safeQuery = async (label, query, { optional = true } = {}) => {
+    try {
+      return await overpassQuery(query, 30, signal);
+    } catch (err) {
+      if (!optional) throw err;
+      console.warn(
+        `[overpass] ⚠️ Split fallback sub-query failed (${label}): ${String(err?.message || err).slice(0, 180)}`,
+      );
+      return { elements: [] };
+    }
+  };
+
+  // Roads are required for routing. Other datasets are safety enrichments and
+  // can degrade to empty on temporary provider failures.
   const [roads, lights, cctv, places, transit] = await Promise.all([
-    overpassQuery(roadQuery, 30, signal),
-    overpassQuery(lightsQuery, 30, signal),
-    overpassQuery(cctvQuery, 30, signal),
-    overpassQuery(placesQuery, 30, signal),
-    overpassQuery(transitQuery, 30, signal),
+    safeQuery("roads", roadQuery, { optional: false }),
+    safeQuery("lights", lightsQuery),
+    safeQuery("cctv", cctvQuery),
+    safeQuery("places", placesQuery),
+    safeQuery("transit", transitQuery),
   ]);
 
   return {
