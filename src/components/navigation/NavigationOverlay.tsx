@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { NavigationInfo } from '@/src/hooks/useNavigation';
+import type { NavAlert } from '@/src/hooks/useNavAlerts';
 import { formatDuration, formatNavDistance, maneuverIcon, stripHtml } from '@/src/utils/format';
 
 let _useIsInPip: () => { isInPipMode: boolean } = () => ({ isInPipMode: false });
@@ -19,16 +20,31 @@ interface NavigationOverlayProps {
   topInset: number;
   bottomInset: number;
   liveSharingNotice?: string | null;
+  navAlert?: NavAlert | null;
+  showReportButton?: boolean;
+  onPressReport?: () => void;
   showRecenter?: boolean;
   onRecenter?: () => void;
 }
 
-export function NavigationOverlay({ nav, topInset, bottomInset, liveSharingNotice, showRecenter = false, onRecenter }: NavigationOverlayProps) {
+export function NavigationOverlay({ nav, topInset, bottomInset, liveSharingNotice, navAlert, showReportButton = false, onPressReport, showRecenter = false, onRecenter }: NavigationOverlayProps) {
   const { isInPipMode } = _useIsInPip();
   const isActive = nav.state === 'navigating' || nav.state === 'off-route';
   const [clockTickMs, setClockTickMs] = useState(Date.now());
   const stopCompactAnimRef = useRef(new Animated.Value(showRecenter ? 1 : 0));
   const stopCompactAnim = stopCompactAnimRef.current;
+
+  // Alert fade animation
+  const alertAnimRef = useRef(new Animated.Value(0));
+  const alertAnim = alertAnimRef.current;
+  useEffect(() => {
+    Animated.timing(alertAnim, {
+      toValue: navAlert ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [navAlert, alertAnim]);
 
   useEffect(() => {
     Animated.timing(stopCompactAnim, {
@@ -83,10 +99,7 @@ export function NavigationOverlay({ nav, topInset, bottomInset, liveSharingNotic
   if (!isActive && nav.state !== 'arrived') return null;
 
   // ── PiP overlay — transparent, map visible. Two slim strips. ───────────
-  // All sizes are proportional to the measured window width so the layout
-  // remains readable whether the user makes the PiP window tiny or large.
   if (isInPipMode && isActive) {
-    // Reference width: 220 px → scale 1.0. Shrinks down to 0.5 for narrow windows.
     const scale = pipW > 0 ? Math.min(1.0, Math.max(0.50, pipW / 220)) : 0.85;
     const iconCircle = Math.round(28 * scale);
     const iconSz     = Math.round(15 * scale);
@@ -154,92 +167,117 @@ export function NavigationOverlay({ nav, topInset, bottomInset, liveSharingNotic
     );
   }
 
+  // Alert banner styles by kind
+  const alertStyles = {
+    crime: { bg: '#FEF2F2', border: '#FECACA', text: '#991B1B', icon: 'warning-outline' as const, iconColor: '#DC2626' },
+    cctv:  { bg: '#FFFBEB', border: '#FDE68A', text: '#92400E', icon: 'eye-outline' as const, iconColor: '#B45309' },
+    street:{ bg: '#F3F4F6', border: '#E5E7EB', text: '#374151', icon: 'location-outline' as const, iconColor: '#6B7280' },
+  };
+
   return (
     <>
       {isActive && (
         <View style={[styles.overlay, { pointerEvents: 'box-none' }]}>
-          {/* Instruction card */}
-          <View style={[styles.instructionCard, { marginTop: topInset + 8 }]}>
-            <View style={styles.iconRow}>
-              <Ionicons
-                name={maneuverIcon(nav.currentStep?.maneuver) as any}
-                size={28}
-                color="#1570EF"
-              />
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                {nav.distanceToNextTurn > 30 ? (
-                  <Text style={styles.distance}>
-                    In {formatNavDistance(nav.distanceToNextTurn)}
+          {/* Top row: instruction card + report button */}
+          <View style={[styles.topRow, { marginTop: topInset + 8 }]}>
+            <View style={styles.instructionCard}>
+              <View style={styles.iconRow}>
+                <Ionicons
+                  name={maneuverIcon(nav.currentStep?.maneuver) as any}
+                  size={28}
+                  color="#1570EF"
+                />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  {nav.distanceToNextTurn > 30 ? (
+                    <Text style={styles.distance}>
+                      In {formatNavDistance(nav.distanceToNextTurn)}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.instruction} numberOfLines={2}>
+                    {stripHtml(nav.currentStep?.instruction ?? 'Continue on route')}
                   </Text>
-                ) : null}
-                <Text style={styles.instruction} numberOfLines={2}>
-                  {stripHtml(nav.currentStep?.instruction ?? 'Continue on route')}
-                </Text>
+                </View>
               </View>
             </View>
-            {nav.nextStep && (
-              <Text style={styles.then} numberOfLines={1}>
-                Then: {stripHtml(nav.nextStep.instruction)}
-              </Text>
-            )}
+
+            {showReportButton && onPressReport ? (
+              <Pressable
+                onPress={onPressReport}
+                style={styles.reportButton}
+                accessibilityRole="button"
+                accessibilityLabel="Report a hazard"
+              >
+                <Ionicons name="flag-outline" size={20} color="#EF4444" />
+              </Pressable>
+            ) : null}
           </View>
 
+          {/* Nav alert banner */}
+          {navAlert ? (
+            <Animated.View
+              style={[
+                styles.alertBanner,
+                {
+                  opacity: alertAnim,
+                  transform: [{ translateY: alertAnim.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) }],
+                  backgroundColor: alertStyles[navAlert.kind].bg,
+                  borderColor: alertStyles[navAlert.kind].border,
+                },
+              ]}
+            >
+              <Ionicons
+                name={alertStyles[navAlert.kind].icon as any}
+                size={16}
+                color={alertStyles[navAlert.kind].iconColor}
+              />
+              <Text style={[styles.alertBannerText, { color: alertStyles[navAlert.kind].text }]} numberOfLines={2}>
+                {navAlert.text}
+              </Text>
+            </Animated.View>
+          ) : null}
+
           {/* Bottom bar */}
-          <View style={[styles.bottomBar, { marginBottom: bottomInset + 8 }]}>
-            <View>
-              <Text style={styles.remaining}>
-                {formatNavDistance(nav.remainingDistance)} remaining
-              </Text>
-              <Text style={styles.eta}>
-                ETA{' '}
-                <Text style={styles.arrivalTime}>
-                  {new Date(clockTickMs + nav.remainingDuration * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </Text>
-                {' · '}{formatDuration(nav.remainingDuration)} walking
-              </Text>
-              {nav.state === 'off-route' && (
-                <Text style={styles.offRoute}>Off route — rerouting…</Text>
-              )}
-              {liveSharingNotice ? (
-                <View style={styles.liveShareBadge}>
-                  <Ionicons name="radio-outline" size={12} color="#B54708" />
-                  <Text style={styles.liveShareBadgeText}>{liveSharingNotice}</Text>
-                </View>
-              ) : null}
-            </View>
-            <View style={styles.actionsRow}>
-              {showRecenter && onRecenter ? (
-                <Pressable style={styles.recenterButton} onPress={onRecenter}>
-                  <Ionicons name="locate" size={16} color="#ffffff" />
-                  <Text style={styles.recenterText}>Recenter</Text>
-                </Pressable>
-              ) : null}
-              <Pressable onPress={nav.stop}>
-                <Animated.View style={[styles.stopButton, { width: stopButtonWidth }]}> 
-                  <Ionicons name="stop-circle" size={20} color="#ffffff" />
-                  <Animated.View
-                    style={[
-                      styles.stopTextWrap,
-                      {
-                        width: stopTextContainerWidth,
-                        marginLeft: stopTextContainerMarginLeft,
-                      },
-                    ]}
-                  >
-                    <Animated.Text
+          <View style={[styles.bottomStack, { marginBottom: bottomInset + 8 }]}>
+            <View style={styles.bottomBar}>
+              <View style={styles.metaBlock}>
+                {nav.state === 'off-route' && (
+                  <Text style={styles.offRoute}>Off route — rerouting…</Text>
+                )}
+              </View>
+              <View style={styles.actionsRow}>
+                {showRecenter && onRecenter ? (
+                  <Pressable style={styles.recenterButton} onPress={onRecenter}>
+                    <Ionicons name="locate" size={16} color="#ffffff" />
+                    <Text style={styles.recenterText}>Recenter</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable onPress={nav.stop}>
+                  <Animated.View style={[styles.stopButton, { width: stopButtonWidth }]}>
+                    <Ionicons name="stop-circle" size={20} color="#ffffff" />
+                    <Animated.View
                       style={[
-                        styles.stopText,
+                        styles.stopTextWrap,
                         {
-                          opacity: stopTextOpacity,
-                          transform: [{ translateX: stopTextTranslateX }],
+                          width: stopTextContainerWidth,
+                          marginLeft: stopTextContainerMarginLeft,
                         },
                       ]}
                     >
-                      Stop
-                    </Animated.Text>
+                      <Animated.Text
+                        style={[
+                          styles.stopText,
+                          {
+                            opacity: stopTextOpacity,
+                            transform: [{ translateX: stopTextTranslateX }],
+                          },
+                        ]}
+                      >
+                        Stop
+                      </Animated.Text>
+                    </Animated.View>
                   </Animated.View>
-                </Animated.View>
-              </Pressable>
+                </Pressable>
+              </View>
             </View>
           </View>
         </View>
@@ -259,7 +297,7 @@ export function NavigationOverlay({ nav, topInset, bottomInset, liveSharingNotic
 }
 
 const styles = StyleSheet.create({
-  // ── PiP overlay — transparent, map shows through the middle ──────
+  // ── PiP overlay ─────────────────────────────────────────────────
   pipRoot: {
     position: 'absolute',
     top: 0,
@@ -268,7 +306,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     flexDirection: 'column',
   },
-  // Top strip — dark frosted band
   pipTopStrip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -276,7 +313,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 6,
     gap: 6,
-    // min height so it's always readable
     minHeight: 44,
   },
   pipIconCircle: {
@@ -305,7 +341,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.90)',
     lineHeight: 14,
   },
-  // Bottom strip — subtler dark band
   pipBottomStrip: {
     backgroundColor: 'rgba(8, 12, 22, 0.80)',
     paddingHorizontal: 8,
@@ -339,10 +374,15 @@ const styles = StyleSheet.create({
     zIndex: 15,
     elevation: 15,
   },
+  topRow: {
+    marginHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
   instructionCard: {
-    margin: 16,
-    marginTop: 16,
-    padding: 16,
+    flex: 1,
+    padding: 14,
     borderRadius: 18,
     backgroundColor: '#ffffff',
     ...(Platform.OS === 'web' ? { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' } : {}),
@@ -353,7 +393,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   distance: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '800',
     color: '#101828',
   },
@@ -363,69 +403,53 @@ const styles = StyleSheet.create({
     marginTop: 2,
     lineHeight: 20,
   },
-  then: {
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#f2f4f7',
+  alertBanner: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 2px 10px rgba(0,0,0,0.10)' } : {}),
+    elevation: 5,
+  },
+  alertBannerText: {
+    flex: 1,
     fontSize: 13,
-    color: '#667085',
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  bottomStack: {
+    margin: 16,
   },
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    margin: 16,
-    padding: 16,
+    padding: 12,
     borderRadius: 18,
     backgroundColor: '#ffffff',
     ...(Platform.OS === 'web' ? { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)' } : {}),
     elevation: 10,
   },
-  remaining: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#101828',
-  },
-  eta: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#667085',
-    marginTop: 2,
-  },
-  arrivalTime: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#22c55e',
+  metaBlock: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 12,
   },
   offRoute: {
     fontSize: 13,
     fontWeight: '600',
     color: '#ef4444',
-    marginTop: 2,
-  },
-  liveShareBadge: {
-    marginTop: 6,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: '#FFFAEB',
-    borderWidth: 1,
-    borderColor: '#FEC84B',
-  },
-  liveShareBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#B54708',
   },
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 0,
   },
   recenterButton: {
     flexDirection: 'row',
@@ -459,6 +483,22 @@ const styles = StyleSheet.create({
   stopTextWrap: {
     overflow: 'hidden',
     alignItems: 'flex-start',
+  },
+  reportButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 2px 8px rgba(0,0,0,0.12)' } : {}),
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
   },
   arrivedBanner: {
     position: 'absolute',

@@ -26,11 +26,13 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://plymhack2026-fork-1.onrender.com",
-        "EXPO_PUBLIC_SAFETY_API_URL": "https://plymhack2026-fork-safety.onrender.com",
-        "EXPO_PUBLIC_USER_API_URL": "https://plymhack2026-fork-user.onrender.com",
-        "EXPO_PUBLIC_SUBSCRIPTION_API_URL": "https://plymhack2026-fork-subscription.onrender.com",
-        "EXPO_PUBLIC_GEOCODE_API_URL": "https://plymhack2026-fork-1-h8ik.onrender.com"
+        "EXPO_PUBLIC_API_BASE_URL": "https://safenight-gateway.onrender.com",
+        "EXPO_PUBLIC_SAFETY_API_URL": "https://safenight-safety.onrender.com",
+        "EXPO_PUBLIC_OSM_USER_AGENT": "SafeNightHome/1.0",
+        "EXPO_PUBLIC_OSM_EMAIL": "mzst.26.x@gmail.com",
+        "EXPO_PUBLIC_USER_API_URL": "https://safenight-user.onrender.com",
+        "EXPO_PUBLIC_SUBSCRIPTION_API_URL": "https://safenight-subscription.onrender.com",
+        "EXPO_PUBLIC_GEOCODE_API_URL": "https://safenight-geocode.onrender.com"
       }
     }
   },

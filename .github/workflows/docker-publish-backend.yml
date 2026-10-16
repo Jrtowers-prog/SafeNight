@@ -32,8 +32,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  package-and-publish:
-    if: github.repository == 'Jrtowers-prog/PlymHack2026New'
+  publish:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,6 +48,8 @@ jobs:
             dockerfile: backend/Dockerfile.subscription
           - name: geocode
             dockerfile: backend/Dockerfile.geocode
+          - name: osm-ingestion
+            dockerfile: backend/Dockerfile.osm-ingestion
 
     steps:
       - name: Checkout

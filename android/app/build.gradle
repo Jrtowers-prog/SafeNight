@@ -17,6 +17,11 @@ def releaseStoreFile = findProperty('RELEASE_STORE_FILE') ?: System.getenv('RELE
 def releaseStorePassword = findProperty('RELEASE_STORE_PASSWORD') ?: System.getenv('RELEASE_STORE_PASSWORD')
 def releaseKeyAlias = findProperty('RELEASE_KEY_ALIAS') ?: System.getenv('RELEASE_KEY_ALIAS') ?: 'safenight-release'
 def releaseKeyPassword = findProperty('RELEASE_KEY_PASSWORD') ?: System.getenv('RELEASE_KEY_PASSWORD')
+def resolvedReleaseStoreFile = new File(releaseStoreFile)
+if (!resolvedReleaseStoreFile.isAbsolute()) {
+    // Resolve relative paths from android/ root so project and user Gradle props behave the same.
+    resolvedReleaseStoreFile = new File(rootProject.projectDir, releaseStoreFile)
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -119,7 +124,7 @@ android {
             keyPassword 'android'
         }
         release {
-            storeFile file(releaseStoreFile)
+            storeFile resolvedReleaseStoreFile
             storePassword releaseStorePassword ?: ''
             keyAlias releaseKeyAlias
             keyPassword releaseKeyPassword ?: ''

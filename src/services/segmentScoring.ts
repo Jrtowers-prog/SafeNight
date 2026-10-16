@@ -3,7 +3,7 @@
  * Combines lighting, crime, and other factors per 50m segment
  */
 
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 import type { CrimeIncident, SegmentScore } from '@/src/types/safety';
 import { scoreToColor } from '@/src/utils/colorCode';
 import { calculateLightingScore, getLightingDataForSegment } from '@/src/utils/lightingScore';

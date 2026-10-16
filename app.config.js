@@ -1,8 +1,55 @@
 const fs = require('fs');
 const path = require('path');
+const rootDir = process.cwd();
+
+function parseEnvFile(content) {
+  const result = {};
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const eqIndex = trimmed.indexOf('=');
+    if (eqIndex <= 0) continue;
+
+    const key = trimmed.slice(0, eqIndex).trim();
+    let value = trimmed.slice(eqIndex + 1).trim();
+
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    result[key] = value;
+  }
+
+  return result;
+}
+
+function resolveTargetEnvFile() {
+  if (process.env.SAFENIGHT_ENV_FILE) {
+    return process.env.SAFENIGHT_ENV_FILE;
+  }
+
+  return '.env';
+}
+
+function loadSelectedEnvFile() {
+  const selected = resolveTargetEnvFile();
+  const selectedPath = path.join(rootDir, selected);
+
+  if (!fs.existsSync(selectedPath)) return;
+
+  const parsed = parseEnvFile(fs.readFileSync(selectedPath, 'utf8'));
+  for (const [key, value] of Object.entries(parsed)) {
+    // Always override to guarantee platform-specific env selection.
+    process.env[key] = value;
+  }
+}
 
 function readAndroidVersionProps() {
-  const versionFile = path.join(__dirname, 'android', 'version.properties');
+  const versionFile = path.join(rootDir, 'android', 'version.properties');
   let versionCode = 1;
   let versionName = '1.0.0';
 
@@ -29,6 +76,8 @@ function readAndroidVersionProps() {
 }
 
 module.exports = ({ config }) => {
+  loadSelectedEnvFile();
+
   const { versionCode, versionName } = readAndroidVersionProps();
 
   return {

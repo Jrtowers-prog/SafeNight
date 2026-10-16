@@ -115,6 +115,11 @@ export function LimitReachedModal({ visible, limitInfo, onClose, onUpgrade }: Pr
   const isUpgradeRequired = limitInfo.errorType === 'upgrade_required';
   const resetText = formatResetTime(limitInfo.resetsAt, limitInfo.per);
   const perLabel = limitInfo.per ? `/${limitInfo.per}` : ' total';
+  const dismissLabel = onUpgrade
+    ? (!isUpgradeRequired && limitInfo.feature === 'live_sessions'
+      ? "Later, I'll look into live sharing"
+      : 'Not Now')
+    : 'Got it';
 
   return (
     <Modal
@@ -216,7 +221,7 @@ export function LimitReachedModal({ visible, limitInfo, onClose, onUpgrade }: Pr
               onPress={onClose}
             >
               <Text style={[styles.dismissButtonText, onUpgrade && styles.dismissButtonTextSecondary]}>
-                {onUpgrade ? 'Not Now' : 'Got it'}
+                {dismissLabel}
               </Text>
             </Pressable>
           </View>

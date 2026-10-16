@@ -33,16 +33,16 @@ export function PrivacyPolicyContent() {
       <Text style={styles.lastUpdated}>Last updated: {PRIVACY_LAST_UPDATED}</Text>
 
       <Text style={styles.body}>
-        SafeNight ("we", "our", "us") is committed to protecting your privacy. This Privacy Policy
+        SafeNight (&quot;we&quot;, &quot;our&quot;, &quot;us&quot;) is committed to protecting your privacy. This Privacy Policy
         explains how we collect, use, store, and share your personal information when you use the
-        SafeNight application (the "Service"), available on Android, iOS, and via web at
+        SafeNight application (the &quot;Service&quot;), available on Android, iOS, and via web at
         safenight.netlify.app.
       </Text>
 
       <Text style={styles.sectionTitle}>1. Information We Collect</Text>
       <Text style={styles.body}>
         <Text style={styles.bold}>Location Data: </Text>
-        We collect your device's precise GPS location while the Service is in the foreground to
+        We collect your device&apos;s precise GPS location while the Service is in the foreground to
         provide route navigation, safety scoring, and nearby point-of-interest features. We do NOT
         collect location data when the app is in the background unless you have explicitly enabled
         background location sharing during an active Safety Circle session.
@@ -140,7 +140,7 @@ export function PrivacyPolicyContent() {
         • <Text style={styles.bold}>Access</Text> — request a copy of your personal data.{'\n'}
         • <Text style={styles.bold}>Rectification</Text> — correct inaccurate data via your profile.{'\n'}
         • <Text style={styles.bold}>Erasure</Text> — delete your account and all personally
-        identifiable data via "Delete Account" in the profile menu. Note: anonymised safety
+        identifiable data via &quot;Delete Account&quot; in the profile menu. Note: anonymised safety
         reports and aggregate usage analytics are retained as described in section 4.{'\n'}
         • <Text style={styles.bold}>Restriction</Text> — ask us to stop processing your data in
         certain circumstances.{'\n'}
@@ -153,7 +153,7 @@ export function PrivacyPolicyContent() {
         To exercise any of these rights, contact us at mzst.26.x@gmail.com.
       </Text>
 
-      <Text style={styles.sectionTitle}>7. Children's Privacy</Text>
+      <Text style={styles.sectionTitle}>7. Children&apos;s Privacy</Text>
       <Text style={styles.body}>
         SafeNight is not intended for children under 16. We do not knowingly collect personal data
         from anyone under 16. If you believe a child has provided us with personal data, please
@@ -164,7 +164,7 @@ export function PrivacyPolicyContent() {
       <Text style={styles.body}>
         The Service integrates the following third-party services, each governed by their own
         privacy policies:{'\n\n'}
-        • <Text style={styles.bold}>Google Maps API</Text> — map display and geocoding{'\n'}
+        • <Text style={styles.bold}>OpenStreetMap / Nominatim</Text> — map display and geocoding{'\n'}
         • <Text style={styles.bold}>OpenStreetMap / OSRM</Text> — routing and map tiles{'\n'}
         • <Text style={styles.bold}>UK Police Data API</Text> — public crime statistics{'\n'}
         • <Text style={styles.bold}>Stripe</Text> — payment processing{'\n'}

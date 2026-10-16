@@ -3,7 +3,7 @@
  * for detailed analysis and color coding
  */
 
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 
 const EARTH_RADIUS_METERS = 6371000;
 

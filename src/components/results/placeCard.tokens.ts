@@ -1,0 +1,35 @@
+export const placeCardTokens = {
+  colors: {
+    surface: "#ffffff",
+    surfaceSelected: "#eef6ff",
+    border: "#d8e3f4",
+    borderSelected: "#1570ef",
+    textPrimary: "#0f172a",
+    textSecondary: "#475467",
+    textMeta: "#1d4ed8",
+    primary: "#1570ef",
+    primaryText: "#ffffff",
+    ghostBg: "#f5f8ff",
+    ghostBorder: "#dbe6fb",
+    ghostText: "#1f3f76",
+    focusRing: "#93c5fd",
+  },
+  radius: {
+    card: 14,
+    button: 10,
+    pill: 999,
+  },
+  spacing: {
+    cardPadding: 12,
+    contentGap: 8,
+    actionsGap: 8,
+    rowGap: 6,
+  },
+  typography: {
+    title: 15,
+    subtitle: 13,
+    meta: 12,
+    primaryAction: 14,
+    secondaryAction: 13,
+  },
+} as const;

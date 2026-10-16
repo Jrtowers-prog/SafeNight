@@ -1,4 +1,4 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
@@ -45,9 +45,35 @@ export default function RootLayout() {
   useEffect(() => {
     const handleUrl = async (url: string | null) => {
       if (!url) return;
-      if (!url.includes('reset-password') && !url.includes('type=recovery')) return;
 
-      const queryString = url.includes('?') ? url.split('?')[1] : '';
+      const parsedUrl = url.trim();
+      const hasResetFlow =
+        parsedUrl.includes('reset-password') || parsedUrl.includes('type=recovery');
+
+      const tokenFromQuery = (() => {
+        const queryString = parsedUrl.includes('?') ? parsedUrl.split('?')[1] : '';
+        const params = new URLSearchParams(queryString);
+        return params.get('token');
+      })();
+
+      const tokenFromPath = (() => {
+        const match = parsedUrl.match(/\/share\/([A-Za-z0-9_-]+)/);
+        return match?.[1] ?? null;
+      })();
+
+      const sharedRouteToken = tokenFromQuery || tokenFromPath;
+
+      if (!hasResetFlow && sharedRouteToken) {
+        router.replace({
+          pathname: '/',
+          params: { sharedRouteToken },
+        });
+        return;
+      }
+
+      if (!hasResetFlow) return;
+
+      const queryString = parsedUrl.includes('?') ? parsedUrl.split('?')[1] : '';
       const params = new URLSearchParams(queryString);
       const accessToken = params.get('access_token');
       const refreshToken = params.get('refresh_token') ?? '';

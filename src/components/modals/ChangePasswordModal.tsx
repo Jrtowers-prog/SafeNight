@@ -258,7 +258,7 @@ export function ChangePasswordModal({
               </View>
 
               {confirmPassword.length > 0 && !passwordsMatch && (
-                <Text style={styles.mismatchText}>Passwords don't match</Text>
+                <Text style={styles.mismatchText}>Passwords don&apos;t match</Text>
               )}
 
               {/* Requirements checklist */}

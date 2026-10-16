@@ -1,4 +1,4 @@
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 
 export const decodePolyline = (encoded: string): LatLng[] => {
   let index = 0;

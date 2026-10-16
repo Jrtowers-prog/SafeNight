@@ -3,7 +3,7 @@
  * Returns a score 0-1 where 1 = very well lit, 0 = very dark/dangerous
  */
 
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 import { calculateDistance } from '@/src/utils/segmentRoute';
 
 export interface LightingData {

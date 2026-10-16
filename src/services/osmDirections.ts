@@ -6,7 +6,7 @@ import type {
   NavigationStep,
   PlaceDetails,
   PlacePrediction,
-} from '@/src/types/google';
+} from '@/src/types/geo';
 import { decodePolyline } from '@/src/utils/polyline';
 import {
   directionsRateLimiter,
@@ -33,9 +33,20 @@ type GooglePlacesAutocompleteResponse = {
   predictions: Array<{
     place_id: string;
     description: string;
+    category?: string | null;
+    place_type?: string | null;
     structured_formatting?: {
       main_text?: string;
       secondary_text?: string;
+    };
+    address?: {
+      house_number?: string | null;
+      road?: string | null;
+      neighbourhood?: string | null;
+      city?: string | null;
+      county?: string | null;
+      postcode?: string | null;
+      country?: string | null;
     };
     lat?: number;
     lng?: number;
@@ -112,7 +123,12 @@ const fetchJson = async <T>(url: string): Promise<T> => {
 
 export const fetchPlacePredictions = async (
   input: string,
-  options?: { locationBias?: LatLng; radiusMeters?: number }
+  options?: {
+    locationBias?: LatLng;
+    radiusMeters?: number;
+    limit?: number;
+    subscriptionTier?: string;
+  }
 ): Promise<PlacePrediction[]> => {
   const trimmedInput = input.trim();
 
@@ -127,6 +143,14 @@ export const fetchPlacePredictions = async (
     url += `&lat=${options.locationBias.latitude}&lng=${options.locationBias.longitude}&radius=${options.radiusMeters}`;
   }
 
+  if (options?.limit && Number.isFinite(options.limit) && options.limit > 0) {
+    url += `&limit=${Math.floor(options.limit)}`;
+  }
+
+  if (options?.subscriptionTier) {
+    url += `&subscription_tier=${encodeURIComponent(options.subscriptionTier)}`;
+  }
+
   // Rate limit autocomplete calls
   return placesAutocompleteRateLimiter.execute(async () => {
 
@@ -134,7 +158,7 @@ export const fetchPlacePredictions = async (
 
   if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
     throw new AppError(
-      'google_places_autocomplete_error',
+      'osm_places_autocomplete_error',
       data.error_message ?? `Google Places Autocomplete failed: ${data.status}`
     );
   }
@@ -144,6 +168,19 @@ export const fetchPlacePredictions = async (
     primaryText: prediction.structured_formatting?.main_text ?? prediction.description,
     secondaryText: prediction.structured_formatting?.secondary_text,
     fullText: prediction.description,
+    category: prediction.category ?? undefined,
+    placeType: prediction.place_type ?? undefined,
+    address: prediction.address
+      ? {
+          houseNumber: prediction.address.house_number ?? undefined,
+          road: prediction.address.road ?? undefined,
+          neighbourhood: prediction.address.neighbourhood ?? undefined,
+          city: prediction.address.city ?? undefined,
+          county: prediction.address.county ?? undefined,
+          postcode: prediction.address.postcode ?? undefined,
+          country: prediction.address.country ?? undefined,
+        }
+      : undefined,
     location: prediction.lat != null && prediction.lng != null
       ? { latitude: prediction.lat, longitude: prediction.lng }
       : undefined,

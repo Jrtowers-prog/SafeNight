@@ -1,0 +1,26 @@
+{
+  "name": "safenight-osm-ingestion",
+  "version": "1.0.0",
+  "description": "Daily OSM ingestion and hosted safety data API for SafeNight",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "ingest": "node src/scheduler.js",
+    "test": "jest --coverage",
+    "test:unit": "jest tests/unit --coverage",
+    "test:integration": "jest tests/integration --coverage"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "helmet": "^7.1.0",
+    "node-cron": "^3.0.3",
+    "flatbush": "^4.4.0"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "supertest": "^7.1.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -22,7 +22,20 @@ import { useSafeRoutes } from "@/src/hooks/useSafeRoutes";
 import { reverseGeocode } from "@/src/services/openStreetMap";
 import type { SafeRoute, SafetyLevel } from "@/src/services/safeRoutes";
 import type { SafetyMapResult } from "@/src/services/safetyMapData";
-import type { DirectionsRoute, LatLng, PlaceDetails } from "@/src/types/google";
+import type {
+  DirectionsRoute,
+  LatLng,
+  PlaceDetails,
+  PlacePrediction,
+} from "@/src/types/geo";
+
+const FAKE_PROGRESS_MESSAGES = [
+  "Preparing route analysis…",
+  "Discovering nearby walkable roads…",
+  "Building route corridor…",
+  "Scoring lighting and crime factors…",
+  "Ranking safest route options…",
+];
 
 // ── Public interface ────────────────────────────────────────────────────────
 
@@ -44,6 +57,9 @@ export function useHomeScreen() {
   // ── Web guest detection (must be before onboarding effect) ──
   const isWebGuest = Platform.OS === "web" && !user;
 
+  // ── Origin mode ──
+  const [isUsingCurrentLocation, setIsUsingCurrentLocation] = useState(true);
+
   // Auto-accept onboarding for web guests (no modal needed)
   useEffect(() => {
     if (isWebGuest && onboardingStatus === "ready" && !hasAccepted) {
@@ -56,19 +72,76 @@ export function useHomeScreen() {
   // ── Location ──
   // On web for guests, enable location immediately (onboarding is auto-accepted)
   const {
+    status: locationStatus,
     location,
     error: locationError,
     refresh: refreshLocation,
   } = useCurrentLocation({ enabled: hasAccepted || isWebGuest });
+  const [locationWatchdogExpired, setLocationWatchdogExpired] =
+    useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== "web") {
+      setLocationWatchdogExpired(false);
+      return;
+    }
+
+    if (!isUsingCurrentLocation || location) {
+      setLocationWatchdogExpired(false);
+      return;
+    }
+
+    if (locationStatus === "denied" || locationStatus === "error") {
+      setLocationWatchdogExpired(true);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setLocationWatchdogExpired(true);
+    }, 12000);
+
+    return () => clearTimeout(timer);
+  }, [isUsingCurrentLocation, location, locationStatus]);
+
+  const needsLocationRecovery = useMemo(() => {
+    if (Platform.OS !== "web") return false;
+    if (!isUsingCurrentLocation || location) return false;
+    return (
+      locationStatus === "denied" ||
+      locationStatus === "error" ||
+      locationWatchdogExpired
+    );
+  }, [
+    isUsingCurrentLocation,
+    location,
+    locationStatus,
+    locationWatchdogExpired,
+  ]);
+
+  const locationRecoveryReason = useMemo<
+    "denied" | "error" | "timeout" | null
+  >(() => {
+    if (!needsLocationRecovery) return null;
+    if (locationStatus === "denied") return "denied";
+    if (locationStatus === "error") return "error";
+    return "timeout";
+  }, [needsLocationRecovery, locationStatus]);
 
   // ── Origin ──
-  const [isUsingCurrentLocation, setIsUsingCurrentLocation] = useState(true);
-  const originSearch = useAutoPlaceSearch(location);
+  const originSearch = useAutoPlaceSearch(location, {
+    subscriptionTier,
+  });
   const [manualOrigin, setManualOrigin] = useState<PlaceDetails | null>(null);
 
   // ── Destination ──
-  const destSearch = useAutoPlaceSearch(location);
+  const destSearch = useAutoPlaceSearch(location, {
+    subscriptionTier,
+  });
   const [manualDest, setManualDest] = useState<PlaceDetails | null>(null);
+  const [selectedDestinationCandidateId, setSelectedDestinationCandidateId] =
+    useState<string | null>(null);
+  const [destinationCandidatesFitToken, setDestinationCandidatesFitToken] =
+    useState(0);
 
   // ── Route selection ──
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
@@ -76,6 +149,8 @@ export function useHomeScreen() {
     location: LatLng;
     key: number;
   } | null>(null);
+  const prevIsUsingCurrentLocationRef = useRef(isUsingCurrentLocation);
+  const hasAutoCenteredCurrentLocationRef = useRef(false);
   const [mapType, setMapType] = useState<MapType>("roadmap");
   const [pinMode, setPinMode] = useState<
     "origin" | "destination" | "via" | null
@@ -108,6 +183,115 @@ export function useHomeScreen() {
 
   // For web guests, don't pass destination to safe routes API (no real fetch)
   const routingDestination = isWebGuest ? null : effectiveDestination;
+
+  // Destination candidates shown when user has typed a destination query
+  // but has not yet selected a concrete place.
+  const destinationCandidates = useMemo<PlacePrediction[]>(() => {
+    if (manualDest || destSearch.place) return [];
+    const q = destSearch.query.trim();
+    if (q.length < 2) return [];
+    return (destSearch.predictions || []).filter((p) => Boolean(p.location));
+  }, [manualDest, destSearch.place, destSearch.query, destSearch.predictions]);
+
+  useEffect(() => {
+    if (destinationCandidates.length === 0) {
+      setSelectedDestinationCandidateId(null);
+      return;
+    }
+    const exists = destinationCandidates.some(
+      (p) => p.placeId === selectedDestinationCandidateId,
+    );
+    if (!exists) {
+      setSelectedDestinationCandidateId(destinationCandidates[0].placeId);
+    }
+  }, [destinationCandidates, selectedDestinationCandidateId]);
+
+  const selectedDestinationCandidate = useMemo<PlacePrediction | null>(
+    () =>
+      destinationCandidates.find(
+        (p) => p.placeId === selectedDestinationCandidateId,
+      ) ?? null,
+    [destinationCandidates, selectedDestinationCandidateId],
+  );
+
+  const selectDestinationCandidate = useCallback(
+    (placeId: string, panToCandidate = true) => {
+      const candidate =
+        destinationCandidates.find((p) => p.placeId === placeId) ?? null;
+      if (!candidate) return;
+      setSelectedDestinationCandidateId(candidate.placeId);
+      if (panToCandidate && candidate.location) {
+        setMapPanTo({ location: candidate.location, key: Date.now() });
+      }
+    },
+    [destinationCandidates],
+  );
+
+  const activateSelectedDestinationCandidate = useCallback(() => {
+    const candidate = selectedDestinationCandidate ?? destinationCandidates[0];
+    if (!candidate) return false;
+
+    destSearch.selectPrediction(candidate);
+    setManualDest(null);
+    setSelectedRouteId(null);
+
+    if (candidate.location) {
+      setMapPanTo({ location: candidate.location, key: Date.now() });
+    }
+    return true;
+  }, [
+    selectedDestinationCandidate,
+    destinationCandidates,
+    destSearch,
+    setManualDest,
+  ]);
+
+  const destinationCandidateMarkers = useMemo(() => {
+    return destinationCandidates
+      .filter((p) => Boolean(p.location))
+      .map((p, idx) => ({
+        id: `search-candidate:${p.placeId}`,
+        kind: "shop",
+        coordinate: {
+          latitude: p.location!.latitude,
+          longitude: p.location!.longitude,
+        },
+        label: p.fullText || p.primaryText || `Search result ${idx + 1}`,
+      }));
+  }, [destinationCandidates]);
+
+  const previousCandidateViewportKeyRef = useRef<string>("");
+  useEffect(() => {
+    if (manualDest || destSearch.place) {
+      previousCandidateViewportKeyRef.current = "";
+      return;
+    }
+
+    const queryKey = destSearch.query.trim().toLowerCase();
+    if (queryKey.length < 2 || destinationCandidates.length === 0) {
+      previousCandidateViewportKeyRef.current = "";
+      return;
+    }
+
+    const candidateIds = destinationCandidates.map((p) => p.placeId).join(",");
+    const viewportKey = `${queryKey}|${candidateIds}`;
+    if (viewportKey === previousCandidateViewportKeyRef.current) {
+      return;
+    }
+
+    previousCandidateViewportKeyRef.current = viewportKey;
+    setDestinationCandidatesFitToken((prev) => prev + 1);
+  }, [manualDest, destSearch.place, destSearch.query, destinationCandidates]);
+
+  const handleMapMarkerSelect = useCallback(
+    (markerId: string) => {
+      if (!markerId.startsWith("search-candidate:")) return;
+      const placeId = markerId.slice("search-candidate:".length);
+      if (!placeId) return;
+      selectDestinationCandidate(placeId, false);
+    },
+    [selectDestinationCandidate],
+  );
 
   // ── Safe routes ──
   const {
@@ -142,21 +326,62 @@ export function useHomeScreen() {
   const directionsError = safeRoutesError;
   const bestRouteId = safestRoute?.id ?? null;
 
-  // ── Pathfinding visualisation (client-side coords for WebView animation) ──
+  // ── Local-only progress for loading animation (no backend stream dependency) ──
+  const [vizProgressPct, setVizProgressPct] = useState<number | null>(null);
+  const [vizProgressMessage, setVizProgressMessage] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (directionsStatus !== "loading") {
+      setVizProgressPct(null);
+      setVizProgressMessage(null);
+      return;
+    }
+
+    setVizProgressPct(20);
+    setVizProgressMessage(FAKE_PROGRESS_MESSAGES[0]);
+
+    let stageIdx = 0;
+    const tick = setInterval(() => {
+      setVizProgressPct((prev) => {
+        const current = typeof prev === "number" ? prev : 20;
+        if (current >= 90) return 90;
+        const inc = current < 50 ? 3 : current < 75 ? 2 : 1;
+        return Math.min(90, current + inc);
+      });
+    }, 700);
+
+    const rotate = setInterval(() => {
+      stageIdx = (stageIdx + 1) % FAKE_PROGRESS_MESSAGES.length;
+      setVizProgressMessage(FAKE_PROGRESS_MESSAGES[stageIdx]);
+    }, 2200);
+
+    return () => {
+      clearInterval(tick);
+      clearInterval(rotate);
+    };
+  }, [directionsStatus]);
+
+  // ── Pathfinding visualisation (client-side coords for map animation) ──
   const vizStreamUrl = useMemo(() => {
-    if (
-      directionsStatus !== "loading" ||
-      !effectiveOrigin ||
-      !routingDestination
-    )
+    if (directionsStatus !== "loading" || !effectiveOrigin || !routingDestination) {
       return null;
+    }
+
     return JSON.stringify({
       oLat: effectiveOrigin.latitude,
       oLng: effectiveOrigin.longitude,
       dLat: routingDestination.latitude,
       dLng: routingDestination.longitude,
     });
-  }, [directionsStatus, effectiveOrigin, routingDestination]);
+  }, [
+    directionsStatus,
+    effectiveOrigin?.latitude,
+    effectiveOrigin?.longitude,
+    routingDestination?.latitude,
+    routingDestination?.longitude,
+  ]);
 
   // Live progress needs the search identity (id/client/seq) that the safe-routes
   // request sends. The client does not send those headers yet, so the stream
@@ -206,12 +431,20 @@ export function useHomeScreen() {
     if (destSearch.query.length > 0) setManualDest(null);
   }, [destSearch.query]);
 
-  // Pan to location on first fix
+  // Pan to current location only on first GPS fix or when current-location mode is re-enabled.
+  // Avoid recentering on every location update because that can fight manual map drags.
   useEffect(() => {
-    if (location && isUsingCurrentLocation) {
+    const justEnabledCurrentLocation =
+      isUsingCurrentLocation && !prevIsUsingCurrentLocationRef.current;
+    prevIsUsingCurrentLocationRef.current = isUsingCurrentLocation;
+
+    if (!isUsingCurrentLocation || !location) return;
+
+    if (justEnabledCurrentLocation || !hasAutoCenteredCurrentLocationRef.current) {
       setMapPanTo({ location, key: Date.now() });
+      hasAutoCenteredCurrentLocationRef.current = true;
     }
-  }, [location !== null]);
+  }, [location, isUsingCurrentLocation]);
 
   // Auto-select safest route
   useEffect(() => {
@@ -274,10 +507,12 @@ export function useHomeScreen() {
       }),
     );
     pois.places?.forEach((p: any, i: number) => {
-      // Only show confirmed-open places
-      if (p.open !== true) return;
       const name = p.name || p.amenity || "Place";
-      const status = p.nextChange ? ` · Open, ${p.nextChange}` : " · Open now";
+      const status = p.open === true
+        ? (p.nextChange ? ` · Open, ${p.nextChange}` : " · Open now")
+        : p.open === false
+          ? (p.nextChange ? ` · Closed, ${p.nextChange}` : " · Closed")
+          : " · Hours unknown";
       markers.push({
         id: `poi-place-${i}`,
         kind: "shop",
@@ -348,12 +583,41 @@ export function useHomeScreen() {
   // ── Route segments for coloured overlay ──
   const routeSegments = useMemo(() => {
     if (!selectedSafeRoute?.enrichedSegments) return [];
-    return selectedSafeRoute.enrichedSegments.map((seg, i) => ({
+    const baseSegments = selectedSafeRoute.enrichedSegments.map((seg, i) => ({
       id: `seg-${i}`,
       path: [seg.startCoord, seg.endCoord],
       color: seg.color,
       score: seg.safetyScore,
     }));
+
+    const lightUncertaintySegments = (selectedSafeRoute.lightUncertaintySpans || []).map((span, i) => ({
+      id: `light-gap-${i}`,
+      path: [
+        { latitude: span.start.lat, longitude: span.start.lng },
+        { latitude: span.end.lat, longitude: span.end.lng },
+      ],
+      color: span.reason === 'explicit_dark' ? '#DC2626' : '#F59E0B',
+      score: span.confidence ?? 0,
+    }));
+
+    const generalUncertaintyBoxes = (
+      selectedSafeRoute.generalUncertaintyBoxes?.length
+        ? selectedSafeRoute.generalUncertaintyBoxes
+        : selectedSafeRoute.uncertaintyBoxes || []
+    ).flatMap((box, i) => {
+      const sw = { latitude: box.south, longitude: box.west };
+      const nw = { latitude: box.north, longitude: box.west };
+      const ne = { latitude: box.north, longitude: box.east };
+      const se = { latitude: box.south, longitude: box.east };
+      return [
+        { id: `general-box-${i}-0`, path: [sw, nw], color: '#C026D3', score: 0 },
+        { id: `general-box-${i}-1`, path: [nw, ne], color: '#C026D3', score: 0 },
+        { id: `general-box-${i}-2`, path: [ne, se], color: '#C026D3', score: 0 },
+        { id: `general-box-${i}-3`, path: [se, sw], color: '#C026D3', score: 0 },
+      ];
+    });
+
+    return [...baseSegments, ...lightUncertaintySegments, ...generalUncertaintyBoxes];
   }, [selectedSafeRoute]);
 
   // ── Road labels ──
@@ -482,12 +746,13 @@ export function useHomeScreen() {
   const clearRouteResults = useCallback(() => {
     destSearch.clear();
     setManualDest(null);
+    setSelectedDestinationCandidateId(null);
     setSelectedRouteId(null);
     setViaPinLocation(null);
     setHighlightCategory(null);
   }, [destSearch]);
 
-  /** Swap origin and destination (like Google Maps). */
+  /** Swap origin and destination. */
   const swapOriginAndDest = useCallback(() => {
     // Snapshot current effective values
     const prevOriginIsGPS = isUsingCurrentLocation;
@@ -558,6 +823,11 @@ export function useHomeScreen() {
 
     // Location
     location,
+    locationStatus,
+    locationError,
+    needsLocationRecovery,
+    locationRecoveryReason,
+    refreshLocation,
 
     // Origin
     isUsingCurrentLocation,
@@ -570,6 +840,14 @@ export function useHomeScreen() {
     destSearch,
     manualDest,
     setManualDest,
+    destinationCandidates,
+    destinationCandidatesFitToken,
+    selectedDestinationCandidateId,
+    selectedDestinationCandidate,
+    selectDestinationCandidate,
+    activateSelectedDestinationCandidate,
+    destinationCandidateMarkers,
+    handleMapMarkerSelect,
 
     // Routing
     routes,

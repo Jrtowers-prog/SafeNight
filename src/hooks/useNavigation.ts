@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { DirectionsRoute, LatLng, NavigationStep } from '@/src/types/google';
+import type { DirectionsRoute, LatLng, NavigationStep } from '@/src/types/geo';
 import * as Location from 'expo-location';
 
 // ---------------------------------------------------------------------------

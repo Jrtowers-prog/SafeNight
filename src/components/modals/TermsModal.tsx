@@ -124,7 +124,7 @@ export function TermsContent() {
 
       <Text style={styles.sectionTitle}>9. Third-Party Services & Links</Text>
       <Text style={styles.body}>
-        The Service integrates third-party services including Google Maps, Stripe, Supabase, and
+        The Service integrates third-party services including OpenStreetMap / Nominatim, Stripe, Supabase, and
         OpenAI. Use of these services is subject to their respective terms and privacy policies. We
         are not responsible for the practices of any third-party service.{'\n\n'}
         The Service may display links to third-party websites. These links are provided for

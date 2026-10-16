@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { fetchSafetyMapData, type SafetyMapResult } from '@/src/services/safetyMapData';
-import type { DirectionsRoute } from '@/src/types/google';
+import type { DirectionsRoute } from '@/src/types/geo';
 
 export interface RouteScore {
   routeId: string;

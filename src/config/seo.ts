@@ -14,7 +14,7 @@ export const SEO = {
 
   /** ≤160 chars — shown in Google snippet */
   description:
-    'SafeNight helps you find the safest walking route home at night. AI-powered safety scores, real-time navigation, live location sharing, and a Safety Circle to keep you connected.',
+    'SafeNight helps you choose safer walking routes at night with route safety insights, live navigation, and optional live location sharing with trusted contacts.',
 
   /** Brand / org name */
   siteName: 'SafeNight',
@@ -52,9 +52,9 @@ export const PAGE_SEO: Record<
   { title: string; description: string; canonical?: string }
 > = {
   '/': {
-    title: 'SafeNight — Walk Safer at Night | AI-Powered Route Safety',
+    title: 'SafeNight — Walk Safer at Night | Route Safety Insights',
     description:
-      'Find the safest walking route home at night with AI-powered safety scores, street-light data, crime stats, and live navigation. Download SafeNight free on Android.',
+      'Find safer walking routes at night with route safety scoring, street-light context, crime data overlays, and live turn-by-turn navigation on Android.',
   },
   '/privacy': {
     title: 'Privacy Policy — SafeNight',

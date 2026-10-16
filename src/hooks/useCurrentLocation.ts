@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 
 import {
     getCurrentLocation,
+  getLastKnownLocation,
     requestForegroundLocationPermission,
 } from '@/src/services/location';
 import { AppError } from '@/src/types/errors';
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 
 export type LocationStatus = 'idle' | 'loading' | 'denied' | 'error' | 'ready';
 
@@ -41,11 +42,22 @@ export const useCurrentLocation = (options?: {
       return;
     }
 
+    const cachedLocation = await getLastKnownLocation();
+    if (cachedLocation) {
+      setLocation(cachedLocation);
+      setStatus('ready');
+    }
+
     try {
       const currentLocation = await getCurrentLocation();
       setLocation(currentLocation);
       setStatus('ready');
     } catch (caught) {
+      if (cachedLocation) {
+        // Keep app usable with cached coordinates if live GPS fix is delayed/failed.
+        return;
+      }
+
       const normalizedError =
         caught instanceof AppError
           ? caught

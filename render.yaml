@@ -56,6 +56,10 @@ services:
         sync: false  # Set manually in Render dashboard
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false  # Set manually in Render dashboard
+      - key: SHARE_WEB_BASE_URL
+        value: https://safenight.netlify.app
+      - key: SHARE_DEEP_LINK_BASE
+        value: safenight://share-route
     healthCheckPath: /api/health  # ─── Safety Compute Service ─────────────────────────────────────────────────
   - type: web
     name: safenighthome-safety
@@ -72,6 +76,24 @@ services:
         value: production
       - key: ALLOWED_ORIGINS
         value: https://safenight.netlify.app
+      - key: SAFE_ROUTES_CACHE_DIR
+        value: /tmp/safenight-cache
+      - key: SAFE_ROUTES_ALLOW_STALE_CACHE
+        value: "1"
+      - key: OVERPASS_REQUEST_BUDGET_MS
+        value: "30000"
+      - key: OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS
+        value: "15000"
+      - key: OVERPASS_HEDGE_DELAY_MS
+        value: "250"
+      - key: OVERPASS_SERVER_COOLDOWN_MS
+        value: "30000"
+      - key: OVERPASS_RETRY_STAGGER_MS
+        value: "300"
+      - key: SAFE_ROUTES_OVERPASS_STALE_FETCH_GRACE_MS
+        value: "2200"
+      - key: SAFE_ROUTES_CRIME_STALE_FETCH_GRACE_MS
+        value: "1800"
     healthCheckPath: /api/health
 
   # ─── Subscription Service ────────────────────────────────────────────────────

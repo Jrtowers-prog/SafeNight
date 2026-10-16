@@ -8,6 +8,7 @@
  */
 
 import { env } from "@/src/config/env";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { subscriptionApi } from "@/src/services/userApi";
 import { AppError } from "@/src/types/errors";
 import type {
@@ -15,7 +16,7 @@ import type {
     LatLng,
     NavigationStep,
     RouteSegment,
-} from "@/src/types/google";
+} from "@/src/types/geo";
 import {
     emitLimitReached,
     LimitError,
@@ -24,6 +25,58 @@ import {
 import { decodePolyline } from "@/src/utils/polyline";
 
 const BACKEND_BASE = env.safetyApiUrl;
+const AUTH_TOKEN_STORAGE_KEY = 'safenight_access_token';
+const SEARCH_CLIENT_ID_STORAGE_KEY = 'safenight_search_client_id';
+
+let requestSeqCounter = Date.now();
+let searchClientIdPromise: Promise<string> | null = null;
+
+function nextSearchSeq(): number {
+  requestSeqCounter += 1;
+  return requestSeqCounter;
+}
+
+function createSearchId(
+  origin: LatLng,
+  destination: LatLng,
+  maxDistanceKm: number,
+  waypoint?: LatLng | null,
+): string {
+  const r4 = (v: number) => Math.round(v * 10000) / 10000;
+  const wpLat = waypoint ? r4(waypoint.latitude) : 'x';
+  const wpLng = waypoint ? r4(waypoint.longitude) : 'x';
+  return `${r4(origin.latitude)},${r4(origin.longitude)}->${r4(destination.latitude)},${r4(destination.longitude)}@${wpLat},${wpLng}#${maxDistanceKm}`;
+}
+
+function makeClientId(): string {
+  return `client:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function getSearchClientId(): Promise<string> {
+  if (!searchClientIdPromise) {
+    searchClientIdPromise = (async () => {
+      const existing = await AsyncStorage.getItem(SEARCH_CLIENT_ID_STORAGE_KEY);
+      if (existing && existing.trim()) return existing;
+      const generated = makeClientId();
+      await AsyncStorage.setItem(SEARCH_CLIENT_ID_STORAGE_KEY, generated);
+      return generated;
+    })();
+  }
+
+  try {
+    return await searchClientIdPromise;
+  } catch {
+    searchClientIdPromise = null;
+    return makeClientId();
+  }
+}
+
+async function getAccessToken(): Promise<string | null> {
+  const memoryToken = (globalThis as any).__safenight_access_token;
+  if (typeof memoryToken === 'string' && memoryToken.trim()) return memoryToken;
+  const storageToken = await AsyncStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  return storageToken && storageToken.trim() ? storageToken : null;
+}
 
 // ── Geo helper for bearing (used to detect turn direction) ───────────────────
 const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -42,7 +95,7 @@ const bearing = (a: LatLng, b: LatLng): number => {
 /**
  * Build turn-by-turn NavigationSteps from enriched segments.
  *
- * Follows the Google Maps model:
+ * Follows a familiar turn-by-turn navigation model:
  *  - Short initial stretches (<100 m) get merged into a single
  *    "Continue towards [first named road ahead]" step.
  *  - Each step instruction tells you what to do when you reach
@@ -120,7 +173,7 @@ function buildStepsFromSegments(segments: EnrichedSegment[]): NavigationStep[] {
   }
 
   // ── 2c. Merge leading short groups (<100 m total) ─────────────────────
-  //    Google Maps doesn't show "In 3 m turn right" when you're basically
+  //    Turn-by-turn apps don't show "In 3 m turn right" when you're basically
   //    already at the road. It merges them into one initial step like
   //    "Continue towards [first meaningful road ahead]".
   while (groups.length >= 2 && groups[0].totalDist < 100) {
@@ -341,6 +394,36 @@ export interface SafeRoute extends DirectionsRoute {
   enrichedSegments?: EnrichedSegment[];
   routeStats?: RouteStats;
   routePOIs?: RoutePOIs;
+  queryFootprints?: Array<{
+    cellKey?: string;
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    centerLat?: number;
+    centerLng?: number;
+    segmentCount?: number;
+    status?: string;
+  }>;
+  lightUncertaintySpans?: Array<{
+    start: { lat: number; lng: number };
+    end: { lat: number; lng: number };
+    edgeCount?: number;
+    distance?: number;
+    reason?: string;
+    confidence?: number;
+  }>;
+  generalUncertaintyBoxes?: Array<{
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    reason?: string;
+    edgeCount?: number;
+    distance?: number;
+    confidence?: number;
+  }>;
+  uncertaintyBoxes?: Array<{ south: number; west: number; north: number; east: number }>;
 }
 
 export interface RouteStats {
@@ -472,6 +555,36 @@ interface RawSafeRoute {
     places: Array<{ lat: number; lng: number }>;
     crimes: Array<{ lat: number; lng: number; category?: string }>;
   };
+  queryFootprints?: Array<{
+    cellKey?: string;
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    centerLat?: number;
+    centerLng?: number;
+    segmentCount?: number;
+    status?: string;
+  }>;
+  lightUncertaintySpans?: Array<{
+    start: { lat: number; lng: number };
+    end: { lat: number; lng: number };
+    edgeCount?: number;
+    distance?: number;
+    reason?: string;
+    confidence?: number;
+  }>;
+  generalUncertaintyBoxes?: Array<{
+    south: number;
+    west: number;
+    north: number;
+    east: number;
+    reason?: string;
+    edgeCount?: number;
+    distance?: number;
+    confidence?: number;
+  }>;
+  uncertaintyBoxes?: Array<{ south: number; west: number; north: number; east: number }>;
 }
 
 interface RawResponse {
@@ -564,7 +677,22 @@ export async function fetchSafeRoutes(
   const timer = setTimeout(() => controller.abort(), 120_000); // 120s timeout (cold-start + two-phase pipeline)
 
   try {
-    const resp = await fetch(url, { signal: controller.signal });
+    const [token, searchClientId] = await Promise.all([
+      getAccessToken(),
+      getSearchClientId(),
+    ]);
+    const searchSeq = nextSearchSeq();
+    const searchId = createSearchId(origin, destination, maxDistanceKm, waypoint);
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'X-Search-Id': searchId,
+      'X-Search-Client': searchClientId,
+      'X-Search-Seq': String(searchSeq),
+    };
+
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const resp = await fetch(url, { signal: controller.signal, headers });
     console.log(
       `[safeRoutes] ✅ Got response: ${resp.status} ${resp.statusText}`,
     );
@@ -703,6 +831,10 @@ export async function fetchSafeRoutes(
         safety: r.safety,
         routeStats: r.routeStats,
         routePOIs: r.routePOIs,
+        queryFootprints: r.queryFootprints,
+        lightUncertaintySpans: r.lightUncertaintySpans,
+        generalUncertaintyBoxes: r.generalUncertaintyBoxes,
+        uncertaintyBoxes: r.uncertaintyBoxes,
       };
     });
 

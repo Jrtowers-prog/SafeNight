@@ -49,13 +49,15 @@ const cacheKey = (lat: number, lng: number, radius: number): string =>
  *
  * Targets places with human activity — the key safety signal:
  *   • amenity: restaurant, cafe, bar, pub, fast_food, nightclub, cinema,
- *              theatre, pharmacy, hospital, clinic, bank, marketplace, etc.
+ *              theatre, pharmacy, hospital, clinic, school, university,
+ *              college, library, townhall, community_centre, bank,
+ *              marketplace, etc.
  *   • shop: any shop (supermarket, convenience, etc.)
  *   • leisure: fitness_centre, sports_centre, swimming_pool
  */
 const buildOverpassQuery = (lat: number, lng: number, radius: number): string => {
   const around = `(around:${radius},${lat},${lng})`;
-  return `[out:json][timeout:10];(node["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre|food_court|ice_cream|biergarten"]${around};node["shop"]${around};node["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};way["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre|food_court|ice_cream|biergarten"]${around};way["shop"]${around};way["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};);out center tags qt 50;`;
+  return `[out:json][timeout:10];(node["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|school|university|college|library|townhall|community_centre|bank|marketplace|food_court|ice_cream|biergarten"]${around};node["shop"]${around};node["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};way["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|school|university|college|library|townhall|community_centre|bank|marketplace|food_court|ice_cream|biergarten"]${around};way["shop"]${around};way["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};);out center tags qt 50;`;
 };
 
 // ─── Overpass element → NearbyPlace ─────────────────────────────────────────

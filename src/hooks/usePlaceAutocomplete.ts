@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { fetchPlacePredictions } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
-import type { LatLng, PlacePrediction } from '@/src/types/google';
+import type { LatLng, PlacePrediction } from '@/src/types/geo';
 
 export type AutocompleteStatus = 'idle' | 'loading' | 'error' | 'ready';
 

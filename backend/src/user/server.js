@@ -39,6 +39,7 @@ const liveRouter = require('./routes/live');
 const { cleanupStaleSessions, cleanupOldSessions } = require('./routes/live');
 const subscriptionsRouter = require('./routes/subscriptions');
 const familyRouter = require('./routes/family');
+const sharesRouter = require('./routes/shares');
 
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -68,6 +69,7 @@ app.use('/api/contacts', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 100 
 app.use('/api/live', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 500 }), liveRouter);
 app.use('/api/subscriptions', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 60 }), subscriptionsRouter);
 app.use('/api/family', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 60 }), familyRouter);
+app.use('/api/shares', createRateLimiter({ windowMs: 15 * 60 * 1000, max: 90 }), sharesRouter);
 
 // ─── Health check ────────────────────────────────────────────────────────────
 app.get('/api/health', healthCheck('user-service'));
@@ -85,5 +87,5 @@ app.listen(PORT, '0.0.0.0', () => {
   setInterval(cleanupOldSessions, 60 * 60 * 1000);
   cleanupOldSessions(); // Run once on startup
   console.log('[user] 30-day old session cleanup scheduled (every hour)');
-  console.log(`[user] Routes: auth, usage, reports, reviews, contacts, live, subscriptions, family`);
+  console.log(`[user] Routes: auth, usage, reports, reviews, contacts, live, subscriptions, family, shares`);
 });

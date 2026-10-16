@@ -75,13 +75,13 @@ router.get('/', nearbyLimiter, async (req, res) => {
       return res.json(cached.data);
     }
 
-    // Build Overpass query for amenities, shops, leisure places
+    // Build Overpass query for amenities, schools, and public places
     const around = `(around:${radius},${latResult.value},${lngResult.value})`;
     const query = `[out:json][timeout:10];(
-      node["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre"]${around};
+      node["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|school|university|college|library|townhall|community_centre|bank|marketplace"]${around};
       node["shop"]${around};
       node["leisure"~"fitness_centre|sports_centre|swimming_pool"]${around};
-      way["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|bank|marketplace|community_centre"]${around};
+      way["amenity"~"restaurant|cafe|bar|pub|fast_food|nightclub|cinema|theatre|pharmacy|hospital|clinic|school|university|college|library|townhall|community_centre|bank|marketplace"]${around};
       way["shop"]${around};
     );out center tags qt 50;`;
 

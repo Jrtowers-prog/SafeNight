@@ -8,6 +8,17 @@ export type PlacePrediction = {
   primaryText: string;
   secondaryText?: string;
   fullText: string;
+  category?: string;
+  placeType?: string;
+  address?: {
+    houseNumber?: string;
+    road?: string;
+    neighbourhood?: string;
+    city?: string;
+    county?: string;
+    postcode?: string;
+    country?: string;
+  };
   location?: LatLng;
   source?: 'osm' | 'os';
 };

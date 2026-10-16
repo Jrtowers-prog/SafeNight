@@ -5,7 +5,7 @@
  * Uses a spatial grid index for O(1) lookups instead of O(n×m) brute-force.
  */
 
-import type { DirectionsRoute, LatLng, RouteSegment } from '@/src/types/google';
+import type { DirectionsRoute, LatLng, RouteSegment } from '@/src/types/geo';
 import type { CrimeIncident, RoadSegment, SafetySummary } from '@/src/types/safety';
 import { scoreToColor } from '@/src/utils/colorCode';
 import { isNighttime } from '@/src/utils/lightingScore';

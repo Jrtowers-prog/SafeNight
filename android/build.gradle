@@ -22,3 +22,24 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+subprojects { subproject ->
+  if (subproject.name == 'app') {
+    subproject.tasks.configureEach { task ->
+      if (task.name.startsWith('configureCMake') && task.name.contains('RelWithDebInfo')) {
+        task.dependsOn(
+          ':react-native-reanimated:prefabReleasePackage',
+          ':react-native-worklets:prefabReleasePackage'
+        )
+      }
+    }
+  }
+
+  if (subproject.name == 'react-native-reanimated') {
+    subproject.tasks.configureEach { task ->
+      if (task.name.startsWith('configureCMake') && task.name.contains('RelWithDebInfo')) {
+        task.dependsOn(':react-native-worklets:prefabReleasePackage')
+      }
+    }
+  }
+}

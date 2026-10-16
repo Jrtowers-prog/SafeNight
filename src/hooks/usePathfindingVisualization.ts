@@ -13,7 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { env } from '@/src/config/env';
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 
 const BACKEND_BASE = env.safetyApiUrl;
 const AUTH_TOKEN_STORAGE_KEY = 'safenight_access_token';

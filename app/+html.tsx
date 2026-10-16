@@ -42,7 +42,7 @@ export default function Root({ children }: PropsWithChildren) {
         <meta property="og:image" content={`${SEO.siteUrl}${SEO.ogImage}`} />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content="SafeNight — AI-powered safe walking routes at night" />
+        <meta property="og:image:alt" content="SafeNight walking safety navigation app" />
         <meta property="og:site_name" content={SEO.siteName} />
         <meta property="og:locale" content={SEO.locale} />
 
@@ -52,7 +52,7 @@ export default function Root({ children }: PropsWithChildren) {
         <meta name="twitter:title" content={SEO.title} />
         <meta name="twitter:description" content={SEO.description} />
         <meta name="twitter:image" content={`${SEO.siteUrl}${SEO.ogImage}`} />
-        <meta name="twitter:image:alt" content="SafeNight — AI-powered safe walking routes at night" />
+        <meta name="twitter:image:alt" content="SafeNight walking safety navigation app" />
         {/* <meta name="twitter:site" content={`@${SEO.twitterHandle}`} /> */}
 
         {/* ── Theme & PWA ──────────────────────────────── */}
@@ -84,16 +84,6 @@ export default function Root({ children }: PropsWithChildren) {
               description: SEO.description,
               applicationCategory: 'UtilitiesApplication',
               operatingSystem: 'Android, iOS, Web',
-              offers: {
-                '@type': 'Offer',
-                price: '0',
-                priceCurrency: 'GBP',
-              },
-              aggregateRating: {
-                '@type': 'AggregateRating',
-                ratingValue: '4.8',
-                ratingCount: '50',
-              },
               author: {
                 '@type': 'Organization',
                 name: 'SafeNight',
@@ -101,7 +91,7 @@ export default function Root({ children }: PropsWithChildren) {
               },
               screenshot: `${SEO.siteUrl}${SEO.ogImage}`,
               featureList:
-                'AI-powered route safety scores, Real-time navigation, Live location sharing, Safety Circle, Street lighting analysis, Crime data integration',
+                'Route safety scores, Real-time navigation, Live location sharing, Safety Circle, Street lighting analysis, Crime data integration',
             }),
           }}
         />

@@ -9,7 +9,7 @@ import {
   type SafetyProgressCb,
 } from '@/src/services/safetyMapData';
 import { AppError } from '@/src/types/errors';
-import type { DirectionsRoute } from '@/src/types/google';
+import type { DirectionsRoute } from '@/src/types/geo';
 
 export type SafetyStatus = 'idle' | 'loading' | 'ready' | 'error';
 

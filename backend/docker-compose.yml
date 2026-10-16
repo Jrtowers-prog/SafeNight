@@ -73,3 +73,24 @@ services:
     ports:
       - "3005:3005"
     restart: unless-stopped
+
+  osm-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile.osm-ingestion
+    image: safenight/osm-ingestion:latest
+    container_name: safenight-osm-ingestion
+    env_file:
+      - .env
+    environment:
+      - PORT=3006
+      - NODE_ENV=production
+      - DATA_DIR=/app/data
+    ports:
+      - "3006:3006"
+    volumes:
+      - osm-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  osm-data:

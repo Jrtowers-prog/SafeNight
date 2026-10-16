@@ -1,3 +1,4 @@
+
 /**
  * overpassClient.js — Optimised Overpass API client.
  *
@@ -14,7 +15,11 @@
 const DEFAULT_OVERPASS_SERVERS = [
   "https://overpass.openstreetmap.fr/api/interpreter",
   "https://overpass-api.de/api/interpreter",
+  "https://lz4.overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
 ];
+
+const { createSafetyCacheStore } = require("./cacheStore");
 
 const OVERPASS_SERVERS = (process.env.OVERPASS_SERVERS || "")
   .split(",")
@@ -34,64 +39,298 @@ const OSM_REFERER =
   process.env.PUBLIC_WEB_URL ||
   "";
 
-let serverIdx = 0;
+function envInt(name, fallback) {
+  const envValues = {
+    OVERPASS_REQUEST_BUDGET_MS: process.env.OVERPASS_REQUEST_BUDGET_MS,
+    OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS:
+      process.env.OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS,
+    OVERPASS_HEDGE_DELAY_MS: process.env.OVERPASS_HEDGE_DELAY_MS,
+    OVERPASS_SERVER_COOLDOWN_MS: process.env.OVERPASS_SERVER_COOLDOWN_MS,
+    OVERPASS_RETRY_STAGGER_MS: process.env.OVERPASS_RETRY_STAGGER_MS,
+    SAFE_ROUTES_ALLOW_STALE_CACHE: process.env.SAFE_ROUTES_ALLOW_STALE_CACHE,
+    SAFE_ROUTES_MAX_STALE_MS: process.env.SAFE_ROUTES_MAX_STALE_MS,
+    SAFE_ROUTES_OVERPASS_MAX_STALE_MS:
+      process.env.SAFE_ROUTES_OVERPASS_MAX_STALE_MS,
+    SAFE_ROUTES_OVERPASS_STALE_FETCH_GRACE_MS:
+      process.env.SAFE_ROUTES_OVERPASS_STALE_FETCH_GRACE_MS,
+  };
 
-// Safety data levels: "standard" = roads + lights only, "extra" = full dataset.
-const SAFETY_LEVEL_STANDARD = "standard";
-const SAFETY_LEVEL_EXTRA = "extra";
+  const raw = envValues[name];
+  if (raw == null || raw === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const OVERPASS_REQUEST_BUDGET_MS = envInt("OVERPASS_REQUEST_BUDGET_MS", 18000);
+const OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS = (() => {
+  const raw = process.env.OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS;
+  if (raw == null || raw === "") return 12000;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 12000;
+})();
+const OVERPASS_HEDGE_DELAY_MS = envInt("OVERPASS_HEDGE_DELAY_MS", 250);
+const OVERPASS_SERVER_COOLDOWN_MS = envInt("OVERPASS_SERVER_COOLDOWN_MS", 30000);
+const OVERPASS_RETRY_STAGGER_MS = envInt("OVERPASS_RETRY_STAGGER_MS", 300);
+const SAFE_ROUTES_ALLOW_STALE_CACHE = envInt("SAFE_ROUTES_ALLOW_STALE_CACHE", 1) === 1;
+const SAFE_ROUTES_MAX_STALE_MS = envInt("SAFE_ROUTES_MAX_STALE_MS", 10 * 60 * 1000);
+const OVERPASS_MAX_STALE_MS = envInt("SAFE_ROUTES_OVERPASS_MAX_STALE_MS", SAFE_ROUTES_MAX_STALE_MS);
+const OVERPASS_STALE_FETCH_GRACE_MS = envInt("SAFE_ROUTES_OVERPASS_STALE_FETCH_GRACE_MS", 1200);
+
+let serverIdx = 0;
+const endpointHealth = new Map();
+const backgroundRefreshInflight = new Map();
+const liveFetchInProgress = new Set();
+const liveFetchPromises = new Set();
+
+const { SAFETY_LEVEL_STANDARD, SAFETY_LEVEL_EXTRA } = require("./safetyLevels");
 
 // ── Data-layer cache (much longer than route cache) ─────────────────────────
-const dataCache = new Map();
 const DATA_CACHE_TTL = 30 * 60 * 1000; // 30 minutes — OSM doesn't change often
+const dataCacheStore = createSafetyCacheStore({
+  namespace: "overpass-data",
+  ttlMs: DATA_CACHE_TTL,
+  maxEntries: 50,
+});
 
 function dataCacheKey(bbox) {
   const r = (v) => Math.round(v * 500) / 500; // ~220m grid
   return `${r(bbox.south)},${r(bbox.west)},${r(bbox.north)},${r(bbox.east)}`;
 }
 
-// A server that fails is skipped for this long, so searches don't wait on it.
-const SERVER_COOLDOWN_MS = 5 * 60 * 1000;
-const serverCooldownUntil = new Map();
-
-function markServerDown(server) {
-  serverCooldownUntil.set(server, Date.now() + SERVER_COOLDOWN_MS);
+function emitSourceMeta(onSourceMeta, meta) {
+  if (typeof onSourceMeta !== "function") return;
+  try {
+    onSourceMeta(meta);
+  } catch {
+    // No-op: observability callbacks should never break request flow.
+  }
 }
 
-/**
- * Servers to try, in rotation order, skipping any in cooldown.
- * If every server is cooling down, try them all anyway.
- */
-function candidateServers() {
+function withTimeout(promise, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return Promise.resolve({ timedOut: true });
+  }
+
+  let timeoutHandle;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutHandle = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+  });
+
+  return Promise.race([
+    promise
+      .then((value) => ({ timedOut: false, value, error: null }))
+      .catch((error) => ({ timedOut: false, value: null, error })),
+    timeoutPromise,
+  ]).finally(() => clearTimeout(timeoutHandle));
+}
+
+function sleep(ms, signal = null) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    if (!signal) return;
+    const onAbort = () => {
+      clearTimeout(timer);
+      const err = new Error("Search cancelled");
+      err.name = "AbortError";
+      reject(err);
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function createAbortError(msg = "Search cancelled") {
+  const err = new Error(msg);
+  err.name = "AbortError";
+  return err;
+}
+
+function createBudgetExceededError() {
+  const err = new Error("Overpass request budget exhausted");
+  err.code = "UPSTREAM_UNAVAILABLE";
+  err.statusCode = 503;
+  err.isServerBusy = true;
+  err.upstreamStatus = 504;
+  err.isBudgetExceeded = true;
+  return err;
+}
+
+function createRequestBudget(parentSignal = null, budgetMs = OVERPASS_REQUEST_BUDGET_MS) {
+  const controller = new AbortController();
+  const deadline = Date.now() + budgetMs;
+  let budgetExpired = false;
+
+  const timer = setTimeout(() => {
+    budgetExpired = true;
+    controller.abort();
+  }, budgetMs);
+
+  const onParentAbort = () => controller.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      clearTimeout(timer);
+      controller.abort();
+    } else {
+      parentSignal.addEventListener("abort", onParentAbort, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    remainingMs() {
+      return Math.max(0, deadline - Date.now());
+    },
+    isBudgetExceeded() {
+      return budgetExpired || Date.now() >= deadline;
+    },
+    dispose() {
+      clearTimeout(timer);
+      if (parentSignal)
+        parentSignal.removeEventListener("abort", onParentAbort);
+    },
+  };
+}
+
+function getEndpointState(server) {
+  let state = endpointHealth.get(server);
+  if (!state) {
+    state = { score: 0, cooldownUntil: 0, lastFailureAt: 0 };
+    endpointHealth.set(server, state);
+  }
+  return state;
+}
+
+function markEndpointFailure(server, err) {
+  const state = getEndpointState(server);
+  state.score = Math.min(state.score + 2, 50);
+  state.lastFailureAt = Date.now();
+  if (err?.isServerBusy) {
+    state.cooldownUntil = Date.now() + OVERPASS_SERVER_COOLDOWN_MS;
+  }
+}
+
+function markEndpointSuccess(server) {
+  const state = getEndpointState(server);
+  state.score = Math.max(0, state.score - 1);
+  if (Date.now() >= state.cooldownUntil) {
+    state.cooldownUntil = 0;
+  }
+}
+
+function orderedServers() {
+  const now = Date.now();
   const n = OVERPASS_SERVERS.length;
-  const ordered = Array.from(
-    { length: n },
-    (_, i) => (serverIdx + i) % n,
-  ).map((i) => OVERPASS_SERVERS[i]);
-  const healthy = ordered.filter(
-    (s) => (serverCooldownUntil.get(s) || 0) <= Date.now(),
+  return OVERPASS_SERVERS.map((server, idx) => {
+    const state = getEndpointState(server);
+    const rotationDistance = (idx - serverIdx + n) % n;
+    const inCooldown = state.cooldownUntil > now;
+    return {
+      server,
+      rotationDistance,
+      inCooldown,
+      score: state.score,
+    };
+  })
+    .sort((a, b) => {
+      if (a.inCooldown !== b.inCooldown) {
+        return a.inCooldown ? 1 : -1;
+      }
+      if (a.score !== b.score) return a.score - b.score;
+      return a.rotationDistance - b.rotationDistance;
+    })
+    .map((entry) => entry.server);
+}
+
+function busyErrorFromStatus(server, status, snippet) {
+  const upstreamErr = new Error(
+    `Overpass ${server} returned ${status}: ${snippet}`,
   );
-  return healthy.length > 0 ? healthy : ordered;
+  upstreamErr.code = "UPSTREAM_UNAVAILABLE";
+  upstreamErr.statusCode = 503;
+  upstreamErr.isServerBusy = true;
+  upstreamErr.upstreamStatus = status;
+  return upstreamErr;
+}
+
+function timeoutError(server) {
+  const timeoutErr = new Error(`Overpass ${server} timed out`);
+  timeoutErr.code = "UPSTREAM_UNAVAILABLE";
+  timeoutErr.statusCode = 503;
+  timeoutErr.isServerBusy = true;
+  timeoutErr.upstreamStatus = 504;
+  return timeoutErr;
+}
+
+async function runServerQuery(
+  server,
+  fullQuery,
+  requestHeaders,
+  timeout,
+  signal,
+  requestBudget,
+) {
+  const timeoutController = new AbortController();
+  const abortFromParent = () => timeoutController.abort();
+  if (signal) signal.addEventListener("abort", abortFromParent, { once: true });
+
+  const remainingMs = requestBudget
+    ? requestBudget.remainingMs()
+    : Number.POSITIVE_INFINITY;
+  if (requestBudget && remainingMs <= 0) {
+    if (signal) signal.removeEventListener("abort", abortFromParent);
+    throw createBudgetExceededError();
+  }
+
+  const timeoutMs = Math.min((timeout + 15) * 1000, remainingMs);
+  if (timeoutMs <= 0) {
+    if (signal) signal.removeEventListener("abort", abortFromParent);
+    throw createBudgetExceededError();
+  }
+
+  const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+  try {
+    const resp = await fetch(server, {
+      method: "POST",
+      headers: requestHeaders,
+      body: `data=${encodeURIComponent(fullQuery)}`,
+      signal: timeoutController.signal,
+    });
+
+    if (resp.status === 403 || resp.status === 429 || resp.status >= 500) {
+      const snippet = (await resp.text()).slice(0, 220);
+      throw busyErrorFromStatus(server, resp.status, snippet);
+    }
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Overpass error ${resp.status}: ${text.slice(0, 200)}`);
+    }
+
+    return await resp.json();
+  } catch (err) {
+    if (err.name === "AbortError") {
+      if (requestBudget?.isBudgetExceeded()) {
+        throw createBudgetExceededError();
+      }
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+      throw timeoutError(server);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", abortFromParent);
+  }
 }
 
 /**
- * Road and street-light sets shared by both safety levels, so the walkable
- * highway list can't drift between them.
+ * Run an Overpass QL query with automatic retry & server rotation.
  */
-function roadsAndLightsSets(b) {
-  return `
-    (
-      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
-    )->.roads;
-    (
-      node["highway"="street_lamp"](${b});
-      way["lit"="yes"](${b});
-    )->.lights;`;
-}
-
-/**
- * Run an Overpass QL query with automatic retry, server rotation & cooldown.
- */
-async function overpassQuery(query, timeout = 90, signal = null) {
+async function overpassQuery(query, timeout = 90, signal = null, requestBudget = null) {
   const fullQuery = `[out:json][timeout:${timeout}];${query}`;
   let lastError;
 
@@ -103,75 +342,106 @@ async function overpassQuery(query, timeout = 90, signal = null) {
   };
   if (OSM_REFERER) requestHeaders.Referer = OSM_REFERER;
 
-  const candidates = candidateServers();
-  // One attempt per server, but a single configured server still gets 3 retries.
-  const maxAttempts = candidates.length > 1 ? candidates.length : 3;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const server = candidates[attempt % candidates.length];
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), (timeout + 15) * 1000);
-      const abortFromParent = () => controller.abort();
-      if (signal)
-        signal.addEventListener("abort", abortFromParent, { once: true });
+  const budget = requestBudget || createRequestBudget(signal, OVERPASS_REQUEST_BUDGET_MS);
+  const createdBudget = !requestBudget;
+  const requestSignal = budget.signal;
 
-      const resp = await fetch(server, {
-        method: "POST",
-        headers: requestHeaders,
-        body: `data=${encodeURIComponent(fullQuery)}`,
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", abortFromParent);
+  try {
+    const servers = orderedServers();
 
-      if (resp.status === 403 || resp.status === 429 || resp.status >= 500) {
-        const snippet = (await resp.text()).slice(0, 220);
-        markServerDown(server);
-        lastError = new Error(
-          `Overpass ${server} returned ${resp.status}: ${snippet}`,
-        );
-        // Small stagger so we don't hammer servers in rapid succession.
-        await new Promise((resolve) =>
-          setTimeout(resolve, 300 + attempt * 250),
+    for (let pairStart = 0; pairStart < servers.length; pairStart += 2) {
+      if (budget.isBudgetExceeded()) throw createBudgetExceededError();
+
+      const primary = servers[pairStart];
+      const secondary = servers[pairStart + 1] || null;
+      const hedgeAbort = new AbortController();
+      const abortFromRequest = () => hedgeAbort.abort();
+      requestSignal.addEventListener("abort", abortFromRequest, { once: true });
+
+      const runTask = async (server, delayMs = 0) => {
+        if (delayMs > 0) {
+          const waitMs = Math.min(delayMs, budget.remainingMs());
+          if (waitMs <= 0) throw createBudgetExceededError();
+          await sleep(waitMs, requestSignal);
+        }
+
+        if (hedgeAbort.signal.aborted) throw createAbortError();
+        const relayAbort = new AbortController();
+        const abortFromAny = () => relayAbort.abort();
+        requestSignal.addEventListener("abort", abortFromAny, { once: true });
+        hedgeAbort.signal.addEventListener("abort", abortFromAny, { once: true });
+        try {
+          const data = await runServerQuery(
+            server,
+            fullQuery,
+            requestHeaders,
+            timeout,
+            relayAbort.signal,
+            budget,
+          );
+          return { server, data };
+        } catch (err) {
+          if (!(err?.name === "AbortError" && !budget.isBudgetExceeded())) {
+            markEndpointFailure(server, err);
+            err.__endpointRecorded = true;
+          }
+          err.server = server;
+          throw err;
+        } finally {
+          requestSignal.removeEventListener("abort", abortFromAny);
+          hedgeAbort.signal.removeEventListener("abort", abortFromAny);
+        }
+      };
+
+      const tasks = [runTask(primary, 0)];
+      if (secondary) tasks.push(runTask(secondary, OVERPASS_HEDGE_DELAY_MS));
+
+      try {
+        const winner = await Promise.any(tasks);
+        hedgeAbort.abort();
+        markEndpointSuccess(winner.server);
+        const winnerIdx = OVERPASS_SERVERS.indexOf(winner.server);
+        if (winnerIdx >= 0) serverIdx = winnerIdx;
+        return winner.data;
+      } catch (aggregateErr) {
+        hedgeAbort.abort();
+        const errors = Array.isArray(aggregateErr?.errors)
+          ? aggregateErr.errors
+          : [aggregateErr];
+        for (const err of errors) {
+          if (err?.name === "AbortError" && !budget.isBudgetExceeded()) continue;
+          const failedServer = err?.server;
+          if (failedServer && !err?.__endpointRecorded) {
+            markEndpointFailure(failedServer, err);
+          }
+          lastError = err;
+        }
+
+        requestSignal.removeEventListener("abort", abortFromRequest);
+
+        if (budget.isBudgetExceeded()) throw createBudgetExceededError();
+        if (requestSignal.aborted && signal?.aborted) throw createAbortError();
+
+        const pairAttempt = Math.floor(pairStart / 2);
+        await sleep(
+          OVERPASS_RETRY_STAGGER_MS + pairAttempt * 250,
+          requestSignal,
         );
         continue;
+      } finally {
+        requestSignal.removeEventListener("abort", abortFromRequest);
       }
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(`Overpass error ${resp.status}: ${text.slice(0, 200)}`);
-      }
-
-      // Some mirrors return an HTML error page with status 200.
-      const text = await resp.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        markServerDown(server);
-        throw new Error(`Overpass ${server} returned non-JSON response`);
-      }
-
-      serverCooldownUntil.delete(server);
-      serverIdx = OVERPASS_SERVERS.indexOf(server);
-      return data;
-    } catch (err) {
-      lastError = err;
-      if (err.name === "AbortError") {
-        if (signal?.aborted) {
-          const abortErr = new Error("Search cancelled");
-          abortErr.name = "AbortError";
-          throw abortErr;
-        }
-        markServerDown(server);
-        lastError = new Error(`Overpass ${server} timed out`);
-      } else if (err instanceof TypeError) {
-        // fetch() throws TypeError on DNS / connection failures.
-        markServerDown(server);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300 + attempt * 250));
     }
+  } finally {
+    if (createdBudget) budget.dispose();
   }
-  throw lastError || new Error("All Overpass servers failed");
+
+  if (lastError) throw lastError;
+  const allFailedErr = new Error("All Overpass servers failed");
+  allFailedErr.code = "UPSTREAM_UNAVAILABLE";
+  allFailedErr.statusCode = 503;
+  allFailedErr.isServerBusy = true;
+  throw allFailedErr;
 }
 
 function toBBoxString(bbox) {
@@ -181,6 +451,7 @@ function toBBoxString(bbox) {
 async function fetchSafetyDataSplitFallback(
   bbox,
   signal = null,
+  requestBudget = null,
   level = SAFETY_LEVEL_EXTRA,
 ) {
   const b = toBBoxString(bbox);
@@ -226,37 +497,46 @@ async function fetchSafetyDataSplitFallback(
     out body;
   `;
 
-  const safeQuery = async (label, query, { optional = true } = {}) => {
-    try {
-      return await overpassQuery(query, 30, signal);
-    } catch (err) {
-      if (!optional) throw err;
-      console.warn(
-        `[overpass] ⚠️ Split fallback sub-query failed (${label}): ${String(err?.message || err).slice(0, 180)}`,
-      );
-      return { elements: [] };
-    }
-  };
+  // Required query: route computation cannot proceed without walkable roads.
+  const roads = await overpassQuery(roadQuery, 30, signal, requestBudget);
 
-  // Roads are required for routing. Other datasets are safety enrichments and
-  // can degrade to empty on temporary provider failures. Standard level skips
-  // CCTV, places and transit entirely.
-  const skipped = { elements: [] };
-  const standard = level === SAFETY_LEVEL_STANDARD;
-  const [roads, lights, cctv, places, transit] = await Promise.all([
-    safeQuery("roads", roadQuery, { optional: false }),
-    safeQuery("lights", lightsQuery),
-    standard ? skipped : safeQuery("cctv", cctvQuery),
-    standard ? skipped : safeQuery("places", placesQuery),
-    standard ? skipped : safeQuery("transit", transitQuery),
-  ]);
+  // Optional categories: degrade to empty data when an upstream provider fails.
+  const optionalQueries = [
+    { name: "lights", query: lightsQuery },
+    { name: "cctv", query: cctvQuery },
+    { name: "places", query: placesQuery },
+    { name: "transit", query: transitQuery },
+  ];
+
+  const optionalResults = await Promise.all(
+    optionalQueries.map(async ({ name, query }) => {
+      // Standard level fetches only roads and lights.
+      if (level === SAFETY_LEVEL_STANDARD && name !== "lights") {
+        return [name, { elements: [] }];
+      }
+      try {
+        const data = await overpassQuery(query, 30, signal, requestBudget);
+        return [name, data];
+      } catch (err) {
+        if (err?.name === "AbortError" || signal?.aborted) {
+          throw err;
+        }
+        console.warn(
+          `[overpass] ⚠️ Split fallback optional '${name}' failed: ${String(err?.message || err).slice(0, 220)}. Continuing with empty '${name}'.`,
+        );
+        return [name, { elements: [] }];
+      }
+    }),
+  );
+
+  const optionalMap = Object.fromEntries(optionalResults);
 
   return {
     roads,
-    lights,
-    cctv,
-    places,
-    transit,
+    lights: optionalMap.lights,
+    cctv: optionalMap.cctv,
+    places: optionalMap.places,
+    transit: optionalMap.transit,
   };
 }
 
@@ -271,25 +551,39 @@ async function fetchSafetyDataSplitFallback(
  *
  * Returns pre-split categorised data.
  * This replaces the old 4-query approach and cuts latency ~70%.
- *
- * `level` selects how much data is fetched:
- *   • "extra" (default) — everything above
- *   • "standard"        — roads + street lights only (faster, less data)
  */
 async function fetchAllSafetyData(bbox, options = {}) {
-  const { signal = null, level = SAFETY_LEVEL_EXTRA } = options;
+  const { signal = null, onSourceMeta = null, level = SAFETY_LEVEL_EXTRA } = options;
+  const standard = level === SAFETY_LEVEL_STANDARD;
   const key = `${dataCacheKey(bbox)}|${level}`;
-  const cached = dataCache.get(key);
-  if (cached && Date.now() - cached.timestamp < DATA_CACHE_TTL) {
-    console.log("[overpass] 📋 Data cache hit");
-    return cached.data;
+  const cacheEntry = await dataCacheStore.getWithMeta(key, {
+    allowStale: SAFE_ROUTES_ALLOW_STALE_CACHE,
+    maxStaleMs: OVERPASS_MAX_STALE_MS,
+  });
+
+  if (cacheEntry && cacheEntry.stale === false) {
+    console.log(`[overpass] 📋 Fresh data cache hit (age=${cacheEntry.ageMs}ms, layer=${cacheEntry.cacheLayer})`);
+    emitSourceMeta(onSourceMeta, {
+      source: "cache_fresh",
+      stale: false,
+      cacheAgeMs: cacheEntry.ageMs,
+      cacheLayer: cacheEntry.cacheLayer,
+    });
+    return cacheEntry.data;
   }
 
   const { south, west, north, east } = bbox;
   const b = `${south},${west},${north},${east}`;
 
   // Single combined Overpass query with named sets
-  const extraQuery = `${roadsAndLightsSets(b)}
+  const extraQuery = `
+    (
+      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
+    )->.roads;
+    (
+      node["highway"="street_lamp"](${b});
+      way["lit"="yes"](${b});
+    )->.lights;
     (
       node["man_made"="surveillance"](${b});
     )->.cctv;
@@ -317,7 +611,15 @@ async function fetchAllSafetyData(bbox, options = {}) {
     .transit out body;
   `;
 
-  const standardQuery = `${roadsAndLightsSets(b)}
+  // Standard level: roads + lights only (faster, less data).
+  const standardQuery = `
+    (
+      way["highway"~"^(trunk|primary|secondary|tertiary|unclassified|residential|living_street|pedestrian|footway|cycleway|path|steps|service|track)$"](${b});
+    )->.roads;
+    (
+      node["highway"="street_lamp"](${b});
+      way["lit"="yes"](${b});
+    )->.lights;
     .roads out body;
     .roads >;
     out skel qt;
@@ -325,69 +627,191 @@ async function fetchAllSafetyData(bbox, options = {}) {
     .lights >;
     out skel qt;
   `;
+  const query = standard ? standardQuery : extraQuery;
 
-  const query =
-    level === SAFETY_LEVEL_STANDARD ? standardQuery : extraQuery;
+  const fetchAndCacheLiveData = (liveSignal = signal) => {
+    const fetchPromise = (async () => {
+      liveFetchInProgress.add(key);
+      console.log("[overpass] 🌐 Fetching ALL safety data in single query...");
+      const t0 = Date.now();
+      let result;
+      const requestBudget = createRequestBudget(
+        liveSignal,
+        OVERPASS_REQUEST_BUDGET_MS,
+      );
+      try {
+        try {
+          // Combined query is heavier than split queries; allow a longer timeout.
+          const raw = await overpassQuery(query, 45, liveSignal, requestBudget);
+          console.log(
+            `[overpass] ✅ Single query: ${raw.elements.length} elements in ${Date.now() - t0}ms`,
+          );
+          result = splitElements(raw.elements);
+          // Standard level is strict: no CCTV, places or transit even if the
+          // combined response carried them.
+          if (standard) {
+            result = {
+              ...result,
+              cctv: { elements: [] },
+              places: { elements: [] },
+              transit: { elements: [] },
+            };
+          }
+        } catch (err) {
+          const msg = String(err?.message || "");
+          const shouldFallback =
+            err?.code === "UPSTREAM_UNAVAILABLE" ||
+            err?.statusCode === 503 ||
+            (typeof err?.upstreamStatus === "number" && err.upstreamStatus >= 500) ||
+            /returned\s+(403|429|5\d\d)/i.test(msg) ||
+            msg.includes(" 403") ||
+            msg.includes(" 429") ||
+            msg.includes(" 504") ||
+            msg.includes("timed out") ||
+            msg.includes("All Overpass servers failed");
 
-  console.log(
-    `[overpass] 🌐 Fetching ${level} safety data in single query...`,
-  );
-  const t0 = Date.now();
-  let result;
-  try {
-    const raw = await overpassQuery(query, 30, signal);
-    console.log(
-      `[overpass] ✅ Single query: ${raw.elements.length} elements in ${Date.now() - t0}ms`,
-    );
-    result = splitElements(raw.elements);
-    // Standard level is strict: a lit way that also has an amenity tag must not
-    // leak into places, CCTV or transit.
-    if (level === SAFETY_LEVEL_STANDARD) {
-      result = {
-        ...result,
-        cctv: { elements: [] },
-        places: { elements: [] },
-        transit: { elements: [] },
-      };
+          if (!shouldFallback) throw err;
+
+          console.warn(
+            `[overpass] ⚠️ Single query failed (${msg.slice(0, 160)}). Falling back to split queries.`,
+          );
+          let splitBudget = requestBudget;
+          let createdSplitBudget = null;
+          if (
+            err?.isBudgetExceeded &&
+            OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS > 0
+          ) {
+            const combinedRemaining = requestBudget.remainingMs();
+            const splitBudgetMs = Math.max(
+              1000,
+              combinedRemaining + OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS,
+            );
+            createdSplitBudget = createRequestBudget(liveSignal, splitBudgetMs);
+            splitBudget = createdSplitBudget;
+            console.warn(
+              `[overpass] ⏱️ Extending split fallback budget by ${OVERPASS_SPLIT_FALLBACK_EXTRA_BUDGET_MS}ms (total split budget=${splitBudgetMs}ms).`,
+            );
+          }
+          let splitData;
+          try {
+            splitData = await fetchSafetyDataSplitFallback(
+              bbox,
+              liveSignal,
+              splitBudget,
+              level,
+            );
+          } finally {
+            if (createdSplitBudget) {
+              createdSplitBudget.dispose();
+            }
+          }
+          const totalElements =
+            (splitData.roads.elements?.length || 0) +
+            (splitData.lights.elements?.length || 0) +
+            (splitData.cctv.elements?.length || 0) +
+            (splitData.places.elements?.length || 0) +
+            (splitData.transit.elements?.length || 0);
+          console.log(
+            `[overpass] ✅ Split fallback: ${totalElements} elements in ${Date.now() - t0}ms`,
+          );
+          result = splitData;
+        }
+
+        await dataCacheStore.set(key, result);
+        return result;
+      } finally {
+        requestBudget.dispose();
+        liveFetchInProgress.delete(key);
+      }
+    })();
+
+    liveFetchPromises.add(fetchPromise);
+    const clearTrackedPromise = () => {
+      liveFetchPromises.delete(fetchPromise);
+    };
+    fetchPromise.then(clearTrackedPromise, clearTrackedPromise);
+
+    return fetchPromise;
+  };
+
+  const scheduleBackgroundRefresh = () => {
+    if (liveFetchInProgress.has(key)) return;
+    if (backgroundRefreshInflight.has(key)) return;
+
+    const refreshPromise = (async () => {
+      try {
+        await fetchAndCacheLiveData(null);
+        console.log("[overpass] ♻️ Background refresh completed");
+      } catch (err) {
+        console.warn(`[overpass] ⚠️ Background refresh failed: ${String(err?.message || err).slice(0, 180)}`);
+      } finally {
+        backgroundRefreshInflight.delete(key);
+      }
+    })();
+
+    backgroundRefreshInflight.set(key, refreshPromise);
+  };
+
+  if (!cacheEntry) {
+    const live = await fetchAndCacheLiveData(signal);
+    emitSourceMeta(onSourceMeta, {
+      source: "live",
+      stale: false,
+      cacheAgeMs: null,
+      cacheLayer: null,
+    });
+    return live;
+  }
+
+  const livePromise = fetchAndCacheLiveData(signal);
+  const liveResult = await withTimeout(livePromise, OVERPASS_STALE_FETCH_GRACE_MS);
+
+  if (!liveResult.timedOut && !liveResult.error) {
+    emitSourceMeta(onSourceMeta, {
+      source: "live",
+      stale: false,
+      cacheAgeMs: null,
+      cacheLayer: null,
+    });
+    return liveResult.value;
+  }
+
+  if (!liveResult.timedOut && liveResult.error) {
+    if (liveResult.error?.name === "AbortError" && signal?.aborted) {
+      throw liveResult.error;
     }
-  } catch (err) {
-    const msg = String(err?.message || err);
-    const shouldFallback =
-      msg.includes(" 403") ||
-      msg.includes(" 429") ||
-      msg.includes("timed out") ||
-      msg.includes("All Overpass servers failed");
-
-    if (!shouldFallback) throw err;
 
     console.warn(
-      `[overpass] ⚠️ Single query failed (${msg.slice(0, 160)}). Falling back to split queries.`,
+      `[overpass] ⚠️ Live fetch failed, serving stale cache (age=${cacheEntry.ageMs}ms, layer=${cacheEntry.cacheLayer}): ${String(liveResult.error?.message || liveResult.error).slice(0, 180)}`,
     );
-    const splitData = await fetchSafetyDataSplitFallback(bbox, signal, level);
-    const totalElements =
-      (splitData.roads.elements?.length || 0) +
-      (splitData.lights.elements?.length || 0) +
-      (splitData.cctv.elements?.length || 0) +
-      (splitData.places.elements?.length || 0) +
-      (splitData.transit.elements?.length || 0);
-    console.log(
-      `[overpass] ✅ Split fallback: ${totalElements} elements in ${Date.now() - t0}ms`,
-    );
-    result = splitData;
+    scheduleBackgroundRefresh();
+    emitSourceMeta(onSourceMeta, {
+      source: "cache_stale",
+      stale: true,
+      cacheAgeMs: cacheEntry.ageMs,
+      cacheLayer: cacheEntry.cacheLayer,
+      staleFallbackReason: "live_error",
+      backgroundRefreshTriggered: true,
+    });
+    return cacheEntry.data;
   }
 
-  // Cache the split result
-  dataCache.set(key, { data: result, timestamp: Date.now() });
-
-  // Evict stale entries
-  if (dataCache.size > 50) {
-    const now = Date.now();
-    for (const [k, v] of dataCache) {
-      if (now - v.timestamp > DATA_CACHE_TTL) dataCache.delete(k);
-    }
-  }
-
-  return result;
+  console.warn(
+    `[overpass] 🕒 Serving stale cache after ${OVERPASS_STALE_FETCH_GRACE_MS}ms live wait (age=${cacheEntry.ageMs}ms, layer=${cacheEntry.cacheLayer})`,
+  );
+  scheduleBackgroundRefresh();
+  emitSourceMeta(onSourceMeta, {
+    source: "cache_stale",
+    stale: true,
+    cacheAgeMs: cacheEntry.ageMs,
+    cacheLayer: cacheEntry.cacheLayer,
+    staleFallbackReason: "live_slow",
+    backgroundRefreshTriggered: true,
+  });
+  livePromise.catch((err) => {
+    console.warn(`[overpass] ⚠️ Live request after stale fallback failed: ${String(err?.message || err).slice(0, 180)}`);
+  });
+  return cacheEntry.data;
 }
 
 /**
@@ -479,10 +903,10 @@ const WALKABLE_HIGHWAYS = new Set([
 async function fetchRoadNetworkOnly(bbox, options = {}) {
   const { signal = null } = options;
   const key = `roads-only:${dataCacheKey(bbox)}`;
-  const cached = dataCache.get(key);
-  if (cached && Date.now() - cached.timestamp < DATA_CACHE_TTL) {
+  const cached = await dataCacheStore.get(key);
+  if (cached) {
     console.log("[overpass] 📋 Road-only cache hit");
-    return cached.data;
+    return cached;
   }
 
   const { south, west, north, east } = bbox;
@@ -495,14 +919,80 @@ async function fetchRoadNetworkOnly(bbox, options = {}) {
 
   console.log("[overpass] 🌐 Fetching road network only (Phase 1)...");
   const t0 = Date.now();
-  const raw = await overpassQuery(query, 30, signal);
+  const requestBudget = createRequestBudget(signal, OVERPASS_REQUEST_BUDGET_MS);
+  let raw;
+  try {
+    raw = await overpassQuery(query, 30, signal, requestBudget);
+  } finally {
+    requestBudget.dispose();
+  }
   console.log(
     `[overpass] ✅ Road-only: ${raw.elements.length} elements in ${Date.now() - t0}ms`,
   );
 
   const data = { elements: raw.elements };
-  dataCache.set(key, { data, timestamp: Date.now() });
+  await dataCacheStore.set(key, data);
   return data;
+}
+
+/**
+ * Fetch only OSM-only safety signals (CCTV, open places, transit).
+ * Lighter query that skips roads and lights — used when OS provides those.
+ */
+async function fetchOsmOnlySafetyData(bbox, options = {}) {
+  const { signal = null, onSourceMeta = null } = options;
+  const { south, west, north, east } = bbox;
+  const b = `${south},${west},${north},${east}`;
+
+  const cctvQuery = `
+    node["man_made"="surveillance"](${b});
+    out body;
+  `;
+
+  const placesQuery = `
+    (
+      node["amenity"](${b});
+      node["shop"](${b});
+      node["leisure"](${b});
+      node["tourism"](${b});
+      way["amenity"](${b});
+      way["shop"](${b});
+    );
+    out center;
+  `;
+
+  const transitQuery = `
+    (
+      node["highway"="bus_stop"](${b});
+      node["public_transport"="stop_position"](${b});
+      node["public_transport"="platform"](${b});
+    );
+    out body;
+  `;
+
+  const [cctv, places, transit] = await Promise.all([
+    overpassQuery(cctvQuery, 30, signal).catch((err) => {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(`[overpass] OSM-only CCTV failed: ${err.message}`);
+      return { elements: [] };
+    }),
+    overpassQuery(placesQuery, 30, signal).catch((err) => {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(`[overpass] OSM-only places failed: ${err.message}`);
+      return { elements: [] };
+    }),
+    overpassQuery(transitQuery, 30, signal).catch((err) => {
+      if (err?.name === 'AbortError' || signal?.aborted) throw err;
+      console.warn(`[overpass] OSM-only transit failed: ${err.message}`);
+      return { elements: [] };
+    }),
+  ]);
+
+  if (typeof onSourceMeta === 'function') {
+    onSourceMeta({ source: 'live', stale: false, osmOnly: true });
+  }
+
+  return { cctv, places, transit };
 }
 
 // Legacy individual fetchers (kept for backwards compat)
@@ -519,14 +1009,37 @@ async function fetchTransitStops(bbox) {
   return (await fetchAllSafetyData(bbox)).transit;
 }
 
+function __resetForTests() {
+  dataCacheStore.clearMemory();
+  endpointHealth.clear();
+  backgroundRefreshInflight.clear();
+  liveFetchInProgress.clear();
+  liveFetchPromises.clear();
+  serverIdx = 0;
+}
+
+async function __waitForInflightForTests() {
+  while (true) {
+    const inflight = [
+      ...backgroundRefreshInflight.values(),
+      ...liveFetchPromises.values(),
+    ];
+    if (inflight.length === 0) return;
+    await Promise.allSettled(inflight);
+  }
+}
+
 module.exports = {
   SAFETY_LEVEL_STANDARD,
   SAFETY_LEVEL_EXTRA,
   overpassQuery,
   fetchAllSafetyData,
   fetchRoadNetworkOnly,
+  fetchOsmOnlySafetyData,
   fetchRoadNetwork,
   fetchLighting,
   fetchOpenPlaces,
   fetchTransitStops,
+  __resetForTests,
+  __waitForInflightForTests,
 };

@@ -84,6 +84,19 @@ google-play-service-account.json
 
 # Markdown documentation files (notes, deployment guides, environment docs)
 *.md
+!docs/
+!docs/testing/
+!docs/testing/*.md
+
+# Test and coverage artifacts
+/coverage/
+/backend/coverage/
+.nyc_output/
+test-results/
+playwright-report/
+junit.xml
+jest-junit.xml
+coverage-final.json
 
 # SQL files (database schema/migration files - keep out of repo)
 *.sql

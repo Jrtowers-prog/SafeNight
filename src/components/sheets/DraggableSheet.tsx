@@ -48,6 +48,10 @@ interface DraggableSheetProps {
   sheetHeight: Animated.Value;
   /** Ref to the height number */
   sheetHeightRef: React.MutableRefObject<number>;
+  /** Optional ScrollView ref (parent can control scrolling) */
+  scrollRef?: any;
+  /** Optional sticky header indices to pass to ScrollView (web/native) */
+  stickyHeaderIndices?: number[];
 }
 
 export function DraggableSheet({
@@ -56,6 +60,8 @@ export function DraggableSheet({
   visible,
   sheetHeight,
   sheetHeightRef,
+  scrollRef,
+  stickyHeaderIndices,
 }: DraggableSheetProps) {
   const scrollOffsetRef = useRef(0);
   const isAtTopRef = useRef(true);
@@ -152,17 +158,24 @@ export function DraggableSheet({
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_, g) => {
+        onMoveShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponderCapture: (_, g) => {
           if (Math.abs(g.dy) < 4) return false;
           // Only intercept when scrolled to top AND swiping down
           return g.dy > 0 && isAtTopRef.current;
         },
+        onPanResponderTerminationRequest: () => true,
         onPanResponderGrant: () => onGestureStart(),
         onPanResponderMove: (_, g) => onGestureMove(g.dy),
         onPanResponderRelease: (_, g) => onGestureEnd(g.dy, g.vy),
+        onShouldBlockNativeResponder: () => false,
       }),
     [onGestureStart, onGestureMove, onGestureEnd],
   );
+
+  // Keep consistent body gesture handoff across platforms:
+  // scroll owns normal interaction; sheet captures only top-edge swipe-down.
+  const bodyPanHandlers = bodyPanResponder.panHandlers;
 
   // ── Scroll tracking ─────────────────────────────────────────────────
   const handleSheetScroll = useCallback((e: any) => {
@@ -175,8 +188,10 @@ export function DraggableSheet({
 
   return (
     <Animated.View
-      style={[styles.sheet, { height: sheetHeight }]}
-      renderToHardwareTextureAndroid
+      style={[
+        styles.sheet,
+        { height: sheetHeight },
+      ]}
       needsOffscreenAlphaCompositing={Platform.OS === 'android'}
     >
       {/* Drag handle */}
@@ -185,9 +200,10 @@ export function DraggableSheet({
       </View>
 
       {/* Scrollable content */}
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1 }} pointerEvents="auto" {...bodyPanHandlers}>
         <ScrollView
-          {...bodyPanResponder.panHandlers}
+          ref={scrollRef}
+          stickyHeaderIndices={stickyHeaderIndices}
           style={styles.scroll}
           contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 24 }]}
           showsVerticalScrollIndicator={false}
@@ -196,6 +212,8 @@ export function DraggableSheet({
           bounces={false}
           nestedScrollEnabled={Platform.OS === 'android'}
           keyboardShouldPersistTaps="always"
+          scrollEnabled
+          pointerEvents="auto"
         >
           {children}
         </ScrollView>
@@ -215,7 +233,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     ...(Platform.OS === 'web'
-      ? { boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)', userSelect: 'none', cursor: 'default', touchAction: 'none' }
+      ? { boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.15)', userSelect: 'none', cursor: 'default' }
       : {
           shadowColor: '#000',
           shadowOffset: { width: 0, height: -4 },
@@ -223,7 +241,7 @@ const styles = StyleSheet.create({
           shadowRadius: 12,
         }),
     elevation: 12,
-    zIndex: 12,
+    zIndex: 220,
     overflow: 'hidden',
   } as any,
   dragZone: {

@@ -11,9 +11,6 @@ type MapTypeControlProps = {
 
 const MAP_TYPE_OPTIONS: { value: MapType; label: string }[] = [
   { value: 'roadmap', label: 'Default' },
-  { value: 'satellite', label: 'Satellite' },
-  { value: 'hybrid', label: 'Hybrid' },
-  { value: 'terrain', label: 'Terrain' },
 ];
 
 export const MapTypeControl = ({ mapType, onMapTypeChange }: MapTypeControlProps) => {

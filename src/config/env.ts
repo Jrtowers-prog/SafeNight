@@ -69,8 +69,11 @@ const subscriptionApiUrl =
         .replace("127.0.0.1", "10.0.2.2")
     : rawSubscriptionApiUrl;
 
-// TODO: Set EXPO_PUBLIC_OS_MAPS_API_KEY in .env / EAS env vars.
-const osMapsApiKey = process.env.EXPO_PUBLIC_OS_MAPS_API_KEY ?? "";
+// Accept both legacy and current key names to avoid config drift across environments.
+const osMapsApiKey =
+  process.env.EXPO_PUBLIC_OS_MAPS_API_KEY ??
+  process.env.EXPO_PUBLIC_MAPTILER_KEY ??
+  "";
 const osMapsLayer = process.env.EXPO_PUBLIC_OS_MAPS_LAYER ?? "Road_3857";
 const osMapsBaseUrl =
   process.env.EXPO_PUBLIC_OS_MAPS_BASE_URL ??
@@ -114,7 +117,7 @@ export const env = {
 export const requireOsMapsApiKey = (): string => {
   if (!env.osMapsApiKey) {
     throw new Error(
-      "Missing EXPO_PUBLIC_OS_MAPS_API_KEY. TODO: Set it in .env or EAS env vars.",
+      "Missing EXPO_PUBLIC_OS_MAPS_API_KEY (or EXPO_PUBLIC_MAPTILER_KEY). TODO: Set it in .env or EAS env vars.",
     );
   }
 

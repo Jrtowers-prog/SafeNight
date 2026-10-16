@@ -3,7 +3,7 @@
  *
  * Progress bar strategy:
  *   1. Starts immediately at 20% to confirm work has begun.
- *   2. Then follows backend SSE progress only (no synthetic progress ticks).
+ *   2. Follows the progress value supplied by the screen state (client-driven).
  *   3. While loading, progress is clamped to 20–90 and completes at 100 on done.
  * Text strategy:
  *   – Rotates through 35 educational safety facts, one every 5 s.
@@ -62,7 +62,7 @@ export function JailLoadingAnimation({ progressPct = null, statusMessage = null 
 
   const [stageIdx, setStageIdx] = useState(0);
   const fadeAnim = useRef(new Animated.Value(1)).current;
-  // Displayed progress 0→100 (driven directly by server progressPct)
+  // Displayed progress 0→100 (driven by the hook-provided progressPct)
   const barAnim = useRef(new Animated.Value(0)).current;
   const [displayPct, setDisplayPct] = useState(MIN_START_PCT);
 
@@ -88,7 +88,7 @@ export function JailLoadingAnimation({ progressPct = null, statusMessage = null 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Prefer real server progress, clamped to 20..90 while loading ──
+  // ── Follow incoming progress, clamped to 20..90 while loading ──
   useEffect(() => {
     const hasServerPct = typeof progressPct === 'number' && Number.isFinite(progressPct) && progressPct >= 0;
     const incoming = !hasServerPct

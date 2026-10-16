@@ -135,14 +135,17 @@ export function MobileWebSheet({ children, visible }: MobileWebSheetProps) {
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_, g) => {
+        onMoveShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponderCapture: (_, g) => {
           if (Math.abs(g.dy) < 4) return false;
           // Only intercept when scrolled to top AND swiping down
           return g.dy > 0 && isAtTopRef.current;
         },
+        onPanResponderTerminationRequest: () => true,
         onPanResponderGrant: () => onGestureStart(),
         onPanResponderMove: (_, g) => onGestureMove(g.dy),
         onPanResponderRelease: (_, g) => onGestureEnd(g.dy, g.vy),
+        onShouldBlockNativeResponder: () => false,
       }),
     [onGestureStart, onGestureMove, onGestureEnd],
   );
@@ -163,9 +166,8 @@ export function MobileWebSheet({ children, visible }: MobileWebSheetProps) {
       </View>
 
       {/* Content */}
-      <View style={styles.scrollWrap}>
+      <View style={styles.scrollWrap} {...bodyPanResponder.panHandlers}>
         <ScrollView
-          {...bodyPanResponder.panHandlers}
           ref={scrollRef}
           style={styles.scroll}
           contentContainerStyle={styles.content}
@@ -174,6 +176,8 @@ export function MobileWebSheet({ children, visible }: MobileWebSheetProps) {
           onScroll={handleScroll}
           bounces={false}
           keyboardShouldPersistTaps="always"
+          scrollEnabled
+          pointerEvents="auto"
         >
           {children}
         </ScrollView>
@@ -196,7 +200,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     userSelect: 'none',
     cursor: 'default',
-    touchAction: 'none',
   } as any,
   dragZone: {
     alignItems: 'center',

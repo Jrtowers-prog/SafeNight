@@ -1,6 +1,6 @@
 import { env } from '@/src/config/env';
 import { AppError } from '@/src/types/errors';
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 import type {
   CrimeIncident,
   OverpassApiResponse,

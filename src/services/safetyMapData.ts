@@ -10,7 +10,7 @@
 
 import { env } from '@/src/config/env';
 import { AppError } from '@/src/types/errors';
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 import { fetchNearbyPlacesCached } from '@/src/utils/nearbyCache';
 import { queueOverpassRequest } from '@/src/utils/overpassQueue';
 
@@ -25,6 +25,8 @@ export interface SafetyMarker {
   kind: MarkerKind;
   coordinate: LatLng;
   label?: string;
+  /** Optional explicit marker color for map renderers (used by search candidate pins). */
+  pinColor?: string;
 }
 
 export interface RoadOverlay {

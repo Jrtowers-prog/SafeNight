@@ -18,7 +18,7 @@ import {
   type SafetyLevel,
 } from '@/src/services/safeRoutes';
 import { AppError } from '@/src/types/errors';
-import type { LatLng } from '@/src/types/google';
+import type { LatLng } from '@/src/types/geo';
 import { LimitError } from '@/src/types/limitError';
 
 /** Round to 4 decimal places (~11 m) to avoid jitter re-fetches */

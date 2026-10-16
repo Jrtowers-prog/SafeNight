@@ -23,7 +23,8 @@ export function AndroidOverlayHost({ children }: AndroidOverlayHostProps) {
 
   return (
     <View
-      style={[styles.host, { pointerEvents: 'box-none' }]}
+      style={styles.host}
+      pointerEvents="box-none"
       collapsable={false}
     >
       {children}

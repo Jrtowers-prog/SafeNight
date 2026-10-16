@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { fetchSmartDirections } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
-import type { DirectionsRoute, LatLng } from '@/src/types/google';
+import type { DirectionsRoute, LatLng } from '@/src/types/geo';
 
 export type DirectionsStatus = 'idle' | 'loading' | 'error' | 'ready';
 

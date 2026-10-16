@@ -1,6 +1,6 @@
 import { env, requireOsmUserAgent } from '@/src/config/env';
 import { AppError } from '@/src/types/errors';
-import type { DirectionsRoute, LatLng, PlaceDetails, PlacePrediction } from '@/src/types/google';
+import type { DirectionsRoute, LatLng, PlaceDetails, PlacePrediction } from '@/src/types/geo';
 import type { NominatimLookupResult, NominatimSearchResult, OsrmRouteResponse } from '@/src/types/osm';
 import { decodePolyline } from '@/src/utils/polyline';
 
@@ -52,7 +52,25 @@ const fetchJson = async <T>(url: string, options?: RequestInit): Promise<T> => {
       );
     }
 
-    return (await response.json()) as T;
+    const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+    const body = await response.text();
+    const trimmed = body.trim();
+
+    if (!trimmed) {
+      throw new AppError('osm_parse_error', 'OpenStreetMap response was empty');
+    }
+
+    const looksJson =
+      contentType.includes('application/json') ||
+      contentType.includes('json') ||
+      trimmed.startsWith('{') ||
+      trimmed.startsWith('[');
+
+    if (!looksJson) {
+      throw new AppError('osm_parse_error', 'OpenStreetMap response was not JSON');
+    }
+
+    return JSON.parse(trimmed) as T;
   } catch (error) {
     clearTimeout(timer);
     if (error instanceof AppError) {
@@ -236,7 +254,25 @@ export const reverseGeocode = async (location: LatLng): Promise<PlaceDetails | n
     const url = `${GEOCODE_API_BASE}/api/geocode/reverse?lat=${location.latitude}&lng=${location.longitude}`;
     const response = await fetch(url);
     if (!response.ok) return null;
-    const data = await response.json() as {
+    const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+    const body = await response.text();
+    const trimmed = body.trim();
+
+    if (!trimmed) {
+      return null;
+    }
+
+    const looksJson =
+      contentType.includes('application/json') ||
+      contentType.includes('json') ||
+      trimmed.startsWith('{') ||
+      trimmed.startsWith('[');
+
+    if (!looksJson) {
+      return null;
+    }
+
+    const data = JSON.parse(trimmed) as {
       status: string;
       result: {
         place_id: string;

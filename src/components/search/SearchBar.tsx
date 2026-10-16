@@ -1,3 +1,4 @@
+
 /**
  * SearchBar — Origin + Destination inputs with prediction dropdown.
  *
@@ -6,9 +7,10 @@
  * battles with the WebView-based map).
  */
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
     ActivityIndicator,
+  InteractionManager,
     Platform,
     Pressable,
     ScrollView,
@@ -21,9 +23,38 @@ import {
 import type { UseAutoPlaceSearchReturn } from "@/src/hooks/useAutoPlaceSearch";
 import type { SavedPlace, SaveResult } from "@/src/hooks/useSavedPlaces";
 import type { SafetyLevel } from "@/src/services/safeRoutes";
-import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/google";
+import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/geo";
 import { SafetyLevelToggle } from "./SafetyLevelToggle";
 import { SavedPlaces } from "./SavedPlaces";
+
+const CATEGORY_CHIP_DEFINITIONS: Array<{
+  key: string;
+  label: string;
+  query: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  { key: "fuel", label: "Fuel", query: "fuel station", icon: "car-sport-outline" },
+  { key: "shop", label: "Shops", query: "shops", icon: "bag-handle-outline" },
+  { key: "food", label: "Food", query: "restaurants", icon: "restaurant-outline" },
+  { key: "parking", label: "Parking", query: "parking", icon: "car-outline" },
+  { key: "pharmacy", label: "Pharmacy", query: "pharmacy", icon: "medkit-outline" },
+  { key: "hospital", label: "Hospital", query: "hospital", icon: "medical-outline" },
+  { key: "bank", label: "Bank", query: "bank", icon: "cash-outline" },
+  { key: "hotel", label: "Hotel", query: "hotel", icon: "bed-outline" },
+];
+
+function classifyPredictionCategory(prediction: PlacePrediction): string | null {
+  const bucket = `${prediction.category || ""} ${prediction.placeType || ""} ${prediction.primaryText || ""} ${prediction.fullText || ""}`.toLowerCase();
+  if (/\bfuel\b|petrol|gas station|charging_station|charging station/.test(bucket)) return "fuel";
+  if (/\bparking\b|car park|park and ride/.test(bucket)) return "parking";
+  if (/restaurant|cafe|coffee|pub|bar|fast_food|takeaway|food/.test(bucket)) return "food";
+  if (/pharmacy|chemist|drugstore/.test(bucket)) return "pharmacy";
+  if (/hospital|clinic|doctor|medical/.test(bucket)) return "hospital";
+  if (/bank|atm/.test(bucket)) return "bank";
+  if (/hotel|guest house|accommodation|lodging/.test(bucket)) return "hotel";
+  if (/shop|supermarket|convenience|store|retail|mall/.test(bucket)) return "shop";
+  return null;
+}
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +85,10 @@ export interface SearchBarProps {
   onClearRoute: () => void;
   /** Swap origin and destination */
   onSwap: () => void;
+  destinationCandidates?: PlacePrediction[];
+  selectedDestinationCandidateId?: string | null;
+  onSelectDestinationCandidate?: (placeId: string, panToCandidate?: boolean) => void;
+  onFindSafeRoutes?: () => boolean;
   /** If provided, tapping any input fires this instead of allowing typing (web guest mode) */
   onGuestTap?: () => void;
   /** When true, renders inline (no absolute positioning) — used inside WebSidebar */
@@ -66,6 +101,8 @@ export interface SearchBarProps {
   ) => Promise<SaveResult> | SaveResult;
   onRemoveSavedPlace?: (id: string) => void;
   onSavedPlaceToast?: (msg: string, icon?: string) => void;
+  /** When true, suppresses prediction/candidate dropdown cards below inputs. */
+  hidePredictionsDropdown?: boolean;
   /** Safety data level for route search (Extra = default) */
   safetyLevel?: SafetyLevel;
   onSafetyLevelChange?: (level: SafetyLevel) => void;
@@ -89,6 +126,9 @@ export function SearchBar({
   onPanTo,
   onClearRoute,
   onSwap,
+  destinationCandidates = [],
+  selectedDestinationCandidateId = null,
+  onSelectDestinationCandidate,
   onGuestTap,
   embedded,
   savedPlaces,
@@ -96,6 +136,7 @@ export function SearchBar({
   onSavePlace,
   onRemoveSavedPlace,
   onSavedPlaceToast,
+  hidePredictionsDropdown = false,
   safetyLevel = 'extra',
   onSafetyLevelChange,
 }: SearchBarProps) {
@@ -107,7 +148,10 @@ export function SearchBar({
     "origin" | "destination" | null
   >(null);
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusRequestIdRef = useRef(0);
   const lastFocusedFieldRef = useRef<"origin" | "destination" | null>(null);
+  const pendingOriginFocusRef = useRef(false);
   const suppressBlurRef = useRef(false);
 
   const handleBlur = useCallback(() => {
@@ -126,6 +170,94 @@ export function SearchBar({
       blurTimerRef.current = null;
     }
   }, []);
+
+  const cancelScheduledFocus = useCallback(() => {
+    focusRequestIdRef.current += 1;
+    if (focusTimerRef.current) {
+      clearTimeout(focusTimerRef.current);
+      focusTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleFieldFocus = useCallback(
+    (field: "origin" | "destination", delayMs: number = 70) => {
+      cancelScheduledFocus();
+      const requestId = focusRequestIdRef.current;
+      focusTimerRef.current = setTimeout(() => {
+        focusTimerRef.current = null;
+        InteractionManager.runAfterInteractions(() => {
+          if (focusRequestIdRef.current !== requestId) return;
+          if (field === "origin") {
+            originInputRef.current?.focus();
+            if (Platform.OS === "android") {
+              requestAnimationFrame(() => {
+                if (focusRequestIdRef.current !== requestId) return;
+                originInputRef.current?.focus();
+              });
+            }
+            return;
+          }
+          destInputRef.current?.focus();
+          if (Platform.OS === "android") {
+            requestAnimationFrame(() => {
+              if (focusRequestIdRef.current !== requestId) return;
+              destInputRef.current?.focus();
+            });
+          }
+        });
+      }, delayMs);
+    },
+    [cancelScheduledFocus],
+  );
+
+  const focusFieldImmediately = useCallback(
+    (field: "origin" | "destination") => {
+      cancelBlurTimer();
+      cancelScheduledFocus();
+      setPinMode(null);
+      setFocusedFieldState(field);
+
+      if (field === "origin") {
+        originInputRef.current?.focus();
+        return;
+      }
+      destInputRef.current?.focus();
+    },
+    [cancelBlurTimer, cancelScheduledFocus, setPinMode],
+  );
+
+  // One handler for the whole origin field, so clicks on its padding work
+  // the same as clicks on the text itself.
+  const activateOrigin = useCallback(() => {
+    if (onGuestTap) {
+      onGuestTap();
+      return;
+    }
+    if (isUsingCurrentLocation) {
+      // The text input is not mounted yet; focus it once it appears.
+      pendingOriginFocusRef.current = true;
+      setIsUsingCurrentLocation(false);
+      return;
+    }
+    // Focus directly. Going through InteractionManager here never ran on web
+    // while the sidebar animates, so the field was never focused.
+    cancelScheduledFocus();
+    focusFieldImmediately("origin");
+  }, [onGuestTap, isUsingCurrentLocation, cancelScheduledFocus, focusFieldImmediately]);
+
+  useEffect(() => {
+    if (!isUsingCurrentLocation && pendingOriginFocusRef.current) {
+      pendingOriginFocusRef.current = false;
+      focusFieldImmediately("origin");
+    }
+  }, [isUsingCurrentLocation, focusFieldImmediately]);
+
+  useEffect(
+    () => () => {
+      cancelScheduledFocus();
+    },
+    [cancelScheduledFocus],
+  );
 
   useEffect(() => {
     if (focusedField) lastFocusedFieldRef.current = focusedField;
@@ -194,6 +326,50 @@ export function SearchBar({
     ],
   );
 
+  const showDestinationCandidateCards =
+    activeField !== "origin" &&
+    !manualDest &&
+    !destSearch.place &&
+    destinationCandidates.length > 0;
+
+  const showLegacyPredictions =
+    activePredictions.length > 0 && !showDestinationCandidateCards;
+
+  const bubbleSource = showDestinationCandidateCards
+    ? destinationCandidates
+    : activePredictions;
+
+  const categoryBubbles = useMemo(() => {
+    if (!bubbleSource || bubbleSource.length === 0) return [];
+
+    const counts = new Map<string, number>();
+    for (const prediction of bubbleSource) {
+      const category = classifyPredictionCategory(prediction);
+      if (!category) continue;
+      counts.set(category, (counts.get(category) || 0) + 1);
+    }
+
+    return CATEGORY_CHIP_DEFINITIONS
+      .map((chip) => ({
+        ...chip,
+        count: counts.get(chip.key) || 0,
+      }))
+      .filter((chip) => chip.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [bubbleSource]);
+
+  const handleCategoryBubblePress = useCallback(
+    (categoryQuery: string) => {
+      // Category chips always target destination discovery.
+      setManualDest(null);
+      destSearch.setQuery(categoryQuery);
+      onClearRoute();
+      setFocusedFieldState("destination");
+      scheduleFieldFocus("destination", 80);
+    },
+    [destSearch, onClearRoute, scheduleFieldFocus, setManualDest],
+  );
+
   return (
     <>
       <ScrollView
@@ -210,21 +386,16 @@ export function SearchBar({
         <View style={[styles.card, embedded && styles.cardEmbedded]}>
           {/* Origin Input */}
           <View style={styles.inputRow}>
-            <View style={styles.inputIconWrap}>
+            <Pressable style={styles.inputIconWrap} onPress={activateOrigin}>
               <View style={styles.iconDot} />
-            </View>
+            </Pressable>
             <Pressable
               style={[
                 styles.inputFieldWrap,
                 focusedField === "origin" && styles.inputFieldWrapFocused,
               ]}
-              onPress={() => {
-                if (onGuestTap) {
-                  onGuestTap();
-                  return;
-                }
-                if (!isUsingCurrentLocation) originInputRef.current?.focus();
-              }}
+              hitSlop={4}
+              onPress={activateOrigin}
             >
               {isUsingCurrentLocation ? (
                 <Pressable
@@ -232,13 +403,7 @@ export function SearchBar({
                     styles.inputField,
                     { flexDirection: "row", alignItems: "center", gap: 6 },
                   ]}
-                  onPress={() => {
-                    if (onGuestTap) {
-                      onGuestTap();
-                      return;
-                    }
-                    setIsUsingCurrentLocation(false);
-                  }}
+                  onPress={activateOrigin}
                   accessibilityRole="button"
                 >
                   <Ionicons
@@ -277,6 +442,11 @@ export function SearchBar({
                       return;
                     }
                     cancelBlurTimer();
+                    if (Platform.OS !== "android") {
+                      cancelScheduledFocus();
+                    } else {
+                      setPinMode(null);
+                    }
                     setFocusedFieldState("origin");
                   }}
                   onBlur={handleBlur}
@@ -311,7 +481,8 @@ export function SearchBar({
                 {!isUsingCurrentLocation && (
                   <Pressable
                     style={styles.mapPinButton}
-                    onPress={() => {
+                    onPress={(e) => {
+                      e.stopPropagation();
                       setIsUsingCurrentLocation(true);
                       setManualOrigin(null);
                       originSearch.clear();
@@ -365,12 +536,14 @@ export function SearchBar({
                 styles.inputFieldWrap,
                 focusedField === "destination" && styles.inputFieldWrapFocused,
               ]}
+              hitSlop={4}
               onPress={() => {
                 if (onGuestTap) {
                   onGuestTap();
                   return;
                 }
-                destInputRef.current?.focus();
+                cancelScheduledFocus();
+                focusFieldImmediately("destination");
               }}
             >
               <TextInput
@@ -399,6 +572,11 @@ export function SearchBar({
                     return;
                   }
                   cancelBlurTimer();
+                  if (Platform.OS !== "android") {
+                    cancelScheduledFocus();
+                  } else {
+                    setPinMode(null);
+                  }
                   setFocusedFieldState("destination");
                 }}
                 onBlur={handleBlur}
@@ -453,55 +631,189 @@ export function SearchBar({
         </View>
 
         {/* Predictions Dropdown */}
-        {activePredictions.length > 0 && (
+        {!hidePredictionsDropdown && showLegacyPredictions && (
           <View
             style={[
               styles.predictionsDropdown,
               embedded && { maxWidth: "100%" as any },
             ]}
           >
-            {activePredictions.map((pred, idx) => (
-              <Pressable
-                key={pred.placeId}
-                style={({ pressed }: { pressed: boolean }) => [
-                  styles.predictionItem,
-                  idx === 0 && styles.predictionItemFirst,
-                  idx === activePredictions.length - 1 &&
-                    styles.predictionItemLast,
-                  pressed && styles.predictionItemPressed,
-                ]}
-                onPressIn={() => {
-                  suppressBlurRef.current = true;
-                  cancelBlurTimer();
-                }}
-                onPress={() => handlePredictionSelect(pred)}
-              >
-                <View style={styles.predictionIcon}>
-                  <Ionicons name="location-outline" size={18} color="#667085" />
-                </View>
-                <View style={styles.predictionText}>
-                  <Text style={styles.predictionPrimary} numberOfLines={1}>
-                    {pred.primaryText}
-                  </Text>
-                  {pred.secondaryText ? (
-                    <Text style={styles.predictionSecondary} numberOfLines={1}>
-                      {pred.secondaryText}
-                    </Text>
-                  ) : null}
-                </View>
-                {idx === 0 && (
-                  <View style={styles.predictionBadge}>
-                    <Text style={styles.predictionBadgeText}>Suggested</Text>
+            {categoryBubbles.length > 0 && (
+              <View>
+                <Text style={styles.categoryHelpText}>
+                  Quick filters: tap a category to update results instantly.
+                </Text>
+                <ScrollView
+                  horizontal
+                  style={styles.categoryBubblesWrap}
+                  contentContainerStyle={styles.categoryBubblesContent}
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="always"
+                >
+                  {categoryBubbles.map((chip, _idx, arr) => {
+                    const iconOnly = arr.length > 3;
+                    return (
+                      <Pressable
+                        key={`legacy-chip-${chip.key}`}
+                        style={[
+                          styles.categoryBubble,
+                          iconOnly ? styles.categoryBubbleIconOnly : null,
+                        ]}
+                        onPress={() => handleCategoryBubblePress(chip.query)}
+                      >
+                        <Ionicons name={chip.icon} size={14} color="#1570ef" />
+                        {!iconOnly ? (
+                          <Text style={styles.categoryBubbleText}>{chip.label}</Text>
+                        ) : null}
+                        <Text style={styles.categoryBubbleCount}>{chip.count}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+            <ScrollView
+              style={styles.predictionsScroll}
+              keyboardShouldPersistTaps="always"
+              nestedScrollEnabled
+            >
+              {activePredictions.map((pred, idx) => (
+                <Pressable
+                  key={pred.placeId}
+                  style={({ pressed }: { pressed: boolean }) => [
+                    styles.predictionItem,
+                    idx === 0 && styles.predictionItemFirst,
+                    idx === activePredictions.length - 1 &&
+                      styles.predictionItemLast,
+                    pressed && styles.predictionItemPressed,
+                  ]}
+                  onPressIn={() => {
+                    suppressBlurRef.current = true;
+                    cancelBlurTimer();
+                  }}
+                  onPress={() => handlePredictionSelect(pred)}
+                >
+                  <View style={styles.predictionIcon}>
+                    <Ionicons name="location-outline" size={18} color="#667085" />
                   </View>
-                )}
-              </Pressable>
-            ))}
+                  <View style={styles.predictionText}>
+                    <Text style={styles.predictionPrimary} numberOfLines={1}>
+                      {pred.primaryText}
+                    </Text>
+                    {pred.secondaryText ? (
+                      <Text style={styles.predictionSecondary} numberOfLines={1}>
+                        {pred.secondaryText}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {idx === 0 && (
+                    <View style={styles.predictionBadge}>
+                      <Text style={styles.predictionBadgeText}>Suggested</Text>
+                    </View>
+                  )}
+                </Pressable>
+              ))}
+            </ScrollView>
           </View>
         )}
       </ScrollView>
 
+      {/* Destination candidates (persistent cards when user typed but hasn't selected) */}
+      {!manualDest &&
+        !hidePredictionsDropdown &&
+        showDestinationCandidateCards &&
+        onSelectDestinationCandidate && (
+          <View
+            style={[
+              styles.predictionsDropdown,
+              embedded && { maxWidth: "100%" as any },
+            ]}
+          >
+            <View style={styles.candidatesHeader}>
+              <Text style={styles.candidatesTitle}>Related places</Text>
+            </View>
+            {categoryBubbles.length > 0 && (
+              <View>
+                <Text style={styles.categoryHelpText}>
+                  Quick filters: tap a category to update results instantly.
+                </Text>
+                <ScrollView
+                  horizontal
+                  style={styles.categoryBubblesWrap}
+                  contentContainerStyle={styles.categoryBubblesContent}
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="always"
+                >
+                  {categoryBubbles.map((chip, _idx, arr) => {
+                    const iconOnly = arr.length > 3;
+                    return (
+                      <Pressable
+                        key={`candidate-chip-${chip.key}`}
+                        style={[
+                          styles.categoryBubble,
+                          iconOnly ? styles.categoryBubbleIconOnly : null,
+                        ]}
+                        onPress={() => handleCategoryBubblePress(chip.query)}
+                      >
+                        <Ionicons name={chip.icon} size={14} color="#1570ef" />
+                        {!iconOnly ? (
+                          <Text style={styles.categoryBubbleText}>{chip.label}</Text>
+                        ) : null}
+                        <Text style={styles.categoryBubbleCount}>{chip.count}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+            <ScrollView
+              style={styles.predictionsScroll}
+              keyboardShouldPersistTaps="always"
+              nestedScrollEnabled
+            >
+              {destinationCandidates.map((pred, idx) => {
+                const selected = pred.placeId === selectedDestinationCandidateId;
+                return (
+                  <Pressable
+                    key={`candidate-${pred.placeId}`}
+                    style={({ pressed }: { pressed: boolean }) => [
+                      styles.predictionItem,
+                      idx === destinationCandidates.length - 1 &&
+                        styles.predictionItemLast,
+                      selected && styles.candidateItemSelected,
+                      pressed && styles.predictionItemPressed,
+                    ]}
+                    onPress={() => {
+                      onSelectDestinationCandidate(pred.placeId, true);
+                    }}
+                  >
+                    <View style={styles.predictionIcon}>
+                      <Ionicons
+                        name={selected ? "radio-button-on" : "radio-button-off"}
+                        size={18}
+                        color={selected ? "#1570ef" : "#667085"}
+                      />
+                    </View>
+                    <View style={styles.predictionText}>
+                      <Text style={styles.predictionPrimary} numberOfLines={1}>
+                        {pred.primaryText}
+                      </Text>
+                      {pred.secondaryText ? (
+                        <Text style={styles.predictionSecondary} numberOfLines={1}>
+                          {pred.secondaryText}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
       {/* ── Saved places (when no predictions showing) ── */}
       {activePredictions.length === 0 &&
+        destinationCandidates.length === 0 &&
         savedPlaces &&
         onSelectSavedPlace &&
         onSavePlace &&
@@ -579,10 +891,13 @@ const styles = StyleSheet.create({
   },
   cardEmbedded: {
     maxWidth: "100%" as any,
+    backgroundColor: "transparent",
     borderRadius: 0,
     boxShadow: "none",
     elevation: 0,
     overflow: "visible",
+    paddingTop: 0,
+    paddingBottom: 0,
   } as any,
   inputRow: {
     flexDirection: "row",
@@ -593,7 +908,9 @@ const styles = StyleSheet.create({
       Platform.OS === "android" ? 4 : Platform.OS === "web" ? 0 : 2,
   },
   inputIconWrap: {
-    width: 20,
+    // Holds the gap that used to be a margin on the field, so every pixel
+    // of the field's own box is part of its tap area.
+    width: 28,
     alignItems: "center",
   },
   iconDot: {
@@ -621,21 +938,24 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    marginLeft: Platform.OS === "android" ? 10 : 8,
-    backgroundColor: "#f9fafb",
-    borderRadius: 10,
+    marginLeft: 0,
+    backgroundColor: "rgba(255, 255, 255, 0.72)",
+    borderRadius: Platform.OS === "web" ? 16 : 12,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: "rgba(255, 255, 255, 0.95)",
     paddingHorizontal:
-      Platform.OS === "android" ? 10 : Platform.OS === "web" ? 12 : 10,
+      Platform.OS === "android" ? 12 : Platform.OS === "web" ? 14 : 10,
     paddingVertical:
-      Platform.OS === "android" ? 8 : Platform.OS === "web" ? 10 : 7,
+      Platform.OS === "android" ? 9 : Platform.OS === "web" ? 11 : 7,
+    ...(Platform.OS === "web"
+      ? { boxShadow: "0 2px 10px rgba(15, 23, 42, 0.08)" }
+      : {}),
   },
   inputFieldWrapFocused: {
-    borderColor: "#1570ef",
-    backgroundColor: "#ffffff",
+    borderColor: "rgba(21, 112, 239, 0.35)",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     ...(Platform.OS === "web"
-      ? { boxShadow: "0 0 0 2px rgba(21, 112, 239, 0.15)" }
+      ? { boxShadow: "0 4px 14px rgba(21, 112, 239, 0.12)" }
       : Platform.OS === "android"
         ? {
             shadowColor: "#1570ef",
@@ -666,9 +986,9 @@ const styles = StyleSheet.create({
     marginLeft: 6,
   },
   mapPinButton: {
-    padding: 5,
-    borderRadius: 6,
-    backgroundColor: "#f2f4f7",
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.8)",
   },
   mapPinButtonActive: {
     backgroundColor: "#e8f0fe",
@@ -693,10 +1013,11 @@ const styles = StyleSheet.create({
     paddingLeft: 8,
   },
   swapButton: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "#f2f4f7",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 255, 255, 0.85)",
+    boxShadow: "0 1px 4px rgba(15, 23, 42, 0.12)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -726,6 +1047,60 @@ const styles = StyleSheet.create({
     maxWidth: 600,
     borderWidth: 1,
     borderColor: "#e5e7eb",
+  },
+  predictionsScroll: {
+    maxHeight: 380,
+  },
+  categoryBubblesWrap: {
+    maxHeight: 46,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f2f4f7",
+  },
+  categoryBubblesContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+    alignItems: "center",
+  },
+  categoryHelpText: {
+    fontSize: 11,
+    color: "#475467",
+    fontWeight: "500",
+    paddingHorizontal: 10,
+    paddingTop: 8,
+  },
+  categoryBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    backgroundColor: "#eff6ff",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minWidth: 0,
+  },
+  categoryBubbleIconOnly: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    gap: 4,
+    borderRadius: 8,
+  },
+  categoryBubbleText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1d4ed8",
+    flexShrink: 1,
+  },
+  categoryBubbleCount: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1570ef",
+    backgroundColor: "#dbeafe",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
   },
   predictionItem: {
     flexDirection: "row",
@@ -775,5 +1150,25 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600",
     color: "#027a48",
+  },
+  candidatesHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f2f4f7",
+  },
+  candidatesTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#344054",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  candidateItemSelected: {
+    backgroundColor: "#eff8ff",
   },
 });

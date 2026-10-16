@@ -387,7 +387,7 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
           <View style={styles.scanOverlay}>
             <View style={styles.scanFrame} />
             <Text style={styles.scanText}>
-              Point at a friend's SafeNight QR code
+              Point at a friend&apos;s SafeNight QR code
             </Text>
           </View>
         </CameraView>
@@ -460,7 +460,7 @@ export default function BuddyModal({ visible, onClose, username: initialUsername
           <Ionicons name="people-outline" size={36} color="#94A3B8" />
           <Text style={styles.emptyText}>No contacts yet</Text>
           <Text style={styles.emptyHint}>
-            Scan a friend's QR code to add them
+            Scan a friend&apos;s QR code to add them
           </Text>
         </View>
       ) : (

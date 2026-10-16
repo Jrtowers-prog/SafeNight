@@ -4,7 +4,7 @@ import type { RouteScore } from '@/src/hooks/useAllRoutesSafety';
 import { fetchAIExplanation, type CompactRouteInfo } from '@/src/services/openai';
 import type { SafeRoute } from '@/src/services/safeRoutes';
 import type { SafetyMapResult } from '@/src/services/safetyMapData';
-import type { DirectionsRoute } from '@/src/types/google';
+import type { DirectionsRoute } from '@/src/types/geo';
 import { LimitError } from '@/src/types/limitError';
 
 export type AIStatus = 'idle' | 'loading' | 'ready' | 'error';

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { fetchRouteSafetySummary } from '@/src/services/safety';
 import { getSegmentStatistics, scoreAllSegments } from '@/src/services/segmentScoring';
 import { AppError } from '@/src/types/errors';
-import type { DirectionsRoute, LatLng } from '@/src/types/google';
+import type { DirectionsRoute, LatLng } from '@/src/types/geo';
 import type { SegmentScore } from '@/src/types/safety';
 import { segmentRoute } from '@/src/utils/segmentRoute';
 

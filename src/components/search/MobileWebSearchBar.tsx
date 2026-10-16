@@ -1,5 +1,6 @@
+
 /**
- * MobileWebSearchBar — Google Maps-style collapsible search.
+ * MobileWebSearchBar — collapsible search.
  *
  * Behaviour:
  *   - Default: single "Where to?" pill at the top
@@ -10,10 +11,13 @@
  * Used on phone-size web AND Android native.
  */
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Animated,
+  Easing,
+    InteractionManager,
+    type LayoutChangeEvent,
     Platform,
     Pressable,
     ScrollView,
@@ -26,9 +30,38 @@ import {
 import type { UseAutoPlaceSearchReturn } from "@/src/hooks/useAutoPlaceSearch";
 import type { SavedPlace, SaveResult } from "@/src/hooks/useSavedPlaces";
 import type { SafetyLevel } from "@/src/services/safeRoutes";
-import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/google";
+import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/geo";
 import { SafetyLevelToggle } from "./SafetyLevelToggle";
 import { SavedPlaces } from "./SavedPlaces";
+
+const CATEGORY_CHIP_DEFINITIONS: {
+  key: string;
+  label: string;
+  query: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { key: "fuel", label: "Fuel", query: "fuel station", icon: "car-sport-outline" },
+  { key: "shop", label: "Shops", query: "shops", icon: "bag-handle-outline" },
+  { key: "food", label: "Food", query: "restaurants", icon: "restaurant-outline" },
+  { key: "parking", label: "Parking", query: "parking", icon: "car-outline" },
+  { key: "pharmacy", label: "Pharmacy", query: "pharmacy", icon: "medkit-outline" },
+  { key: "hospital", label: "Hospital", query: "hospital", icon: "medical-outline" },
+  { key: "bank", label: "Bank", query: "bank", icon: "cash-outline" },
+  { key: "hotel", label: "Hotel", query: "hotel", icon: "bed-outline" },
+];
+
+function classifyPredictionCategory(prediction: PlacePrediction): string | null {
+  const bucket = `${prediction.category || ""} ${prediction.placeType || ""} ${prediction.primaryText || ""} ${prediction.fullText || ""}`.toLowerCase();
+  if (/\bfuel\b|petrol|gas station|charging_station|charging station/.test(bucket)) return "fuel";
+  if (/\bparking\b|car park|park and ride/.test(bucket)) return "parking";
+  if (/restaurant|cafe|coffee|pub|bar|fast_food|takeaway|food/.test(bucket)) return "food";
+  if (/pharmacy|chemist|drugstore/.test(bucket)) return "pharmacy";
+  if (/hospital|clinic|doctor|medical/.test(bucket)) return "hospital";
+  if (/bank|atm/.test(bucket)) return "bank";
+  if (/hotel|guest house|accommodation|lodging/.test(bucket)) return "hotel";
+  if (/shop|supermarket|convenience|store|retail|mall/.test(bucket)) return "shop";
+  return null;
+}
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +80,12 @@ export interface MobileWebSearchBarProps {
   onPanTo: (location: LatLng) => void;
   onClearRoute: () => void;
   onSwap: () => void;
+  destinationCandidates?: PlacePrediction[];
+  selectedDestinationCandidateId?: string | null;
+  onSelectDestinationCandidate?: (placeId: string, panToCandidate?: boolean) => void;
+  onFindSafeRoutes?: () => boolean;
+  /** When true, destination candidate results are rendered in a bottom sheet instead of this dropdown. */
+  renderCandidatesInSheet?: boolean;
   onGuestTap?: () => void;
   /** Whether route results are currently showing */
   hasResults: boolean;
@@ -63,6 +102,10 @@ export interface MobileWebSearchBarProps {
   /** Safety data level for route search (Extra = default) */
   safetyLevel?: SafetyLevel;
   onSafetyLevelChange?: (level: SafetyLevel) => void;
+  /** Optional callback to report expanded/collapsed state to parent overlays. */
+  onExpandedChange?: (expanded: boolean) => void;
+  onContainerLayout?: (metrics: { y: number; height: number; bottom: number }) => void;
+  onEffectiveBottomChange?: (bottomY: number) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -82,6 +125,10 @@ export function MobileWebSearchBar({
   onPanTo,
   onClearRoute,
   onSwap,
+  destinationCandidates = [],
+  selectedDestinationCandidateId = null,
+  onSelectDestinationCandidate,
+  renderCandidatesInSheet = false,
   onGuestTap,
   hasResults,
   topInset,
@@ -92,12 +139,28 @@ export function MobileWebSearchBar({
   onSavedPlaceToast,
   safetyLevel = 'extra',
   onSafetyLevelChange,
+  onExpandedChange,
+  onContainerLayout,
+  onEffectiveBottomChange,
 }: MobileWebSearchBarProps) {
   const [expanded, setExpanded] = useState(false);
   const expandAnim = useRef(new Animated.Value(0)).current;
   const originRef = useRef<TextInput>(null);
   const destRef = useRef<TextInput>(null);
   const prevHasResultsRef = useRef(hasResults);
+  const lastCollapsedDestinationQueryRef = useRef<string | null>(null);
+  const destinationFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const focusRequestIdRef = useRef(0);
+  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const containerMetricsRef = useRef<{
+    y: number;
+    height: number;
+    bottom: number;
+  } | null>(null);
+  const savedPlacesPopupBottomRef = useRef<number | null>(null);
+  const lastEffectiveBottomRef = useRef<number | null>(null);
 
   // Focus management
   const [focusedField, setFocusedField] = useState<
@@ -128,44 +191,218 @@ export function MobileWebSearchBar({
     if (focusedField) lastFocused.current = focusedField;
   }, [focusedField]);
 
+  useEffect(() => {
+    onExpandedChange?.(expanded);
+  }, [expanded, onExpandedChange]);
+
+  const emitEffectiveBottom = useCallback(
+    (metrics: { y: number; height: number; bottom: number }) => {
+      const popupBottom = savedPlacesPopupBottomRef.current;
+      const effectiveBottom =
+        popupBottom == null ? metrics.bottom : Math.max(metrics.bottom, metrics.y + popupBottom);
+
+      if (lastEffectiveBottomRef.current === effectiveBottom) return;
+      lastEffectiveBottomRef.current = effectiveBottom;
+      onEffectiveBottomChange?.(effectiveBottom);
+    },
+    [onEffectiveBottomChange],
+  );
+
+  const handleSavedPlacesPopupBottomChange = useCallback(
+    (bottomY: number | null) => {
+      savedPlacesPopupBottomRef.current = bottomY;
+      const metrics = containerMetricsRef.current;
+      if (!metrics) return;
+      emitEffectiveBottom(metrics);
+    },
+    [emitEffectiveBottom],
+  );
+
+  const reportContainerLayout = useCallback(
+    (metrics: { y: number; height: number; bottom: number }) => {
+      containerMetricsRef.current = metrics;
+      onContainerLayout?.(metrics);
+      emitEffectiveBottom(metrics);
+    },
+    [emitEffectiveBottom, onContainerLayout],
+  );
+
+  const handleContainerLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const { y, height } = event.nativeEvent.layout;
+      reportContainerLayout({ y, height, bottom: y + height });
+    },
+    [reportContainerLayout],
+  );
+
+  useEffect(() => {
+    const metrics = containerMetricsRef.current;
+    if (!metrics) return;
+    onContainerLayout?.(metrics);
+    emitEffectiveBottom(metrics);
+  }, [expanded, emitEffectiveBottom, onContainerLayout]);
+
+  useEffect(() => {
+    if (expanded) return;
+    savedPlacesPopupBottomRef.current = null;
+    const metrics = containerMetricsRef.current;
+    if (!metrics) return;
+    emitEffectiveBottom(metrics);
+  }, [emitEffectiveBottom, expanded]);
+
+  useEffect(() => {
+    return () => {
+      onExpandedChange?.(false);
+    };
+  }, [onExpandedChange]);
+
+  const clearDestinationFocusTimer = useCallback(() => {
+    focusRequestIdRef.current += 1;
+    if (destinationFocusTimerRef.current) {
+      clearTimeout(destinationFocusTimerRef.current);
+      destinationFocusTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleFieldFocus = useCallback(
+    (field: "origin" | "destination", delayMs: number) => {
+      clearDestinationFocusTimer();
+      const requestId = focusRequestIdRef.current;
+      destinationFocusTimerRef.current = setTimeout(() => {
+        destinationFocusTimerRef.current = null;
+        InteractionManager.runAfterInteractions(() => {
+          if (requestId !== focusRequestIdRef.current) return;
+          if (field === "origin") {
+            originRef.current?.focus();
+            if (Platform.OS === "android") {
+              requestAnimationFrame(() => {
+                if (requestId !== focusRequestIdRef.current) return;
+                originRef.current?.focus();
+              });
+            }
+            return;
+          }
+          destRef.current?.focus();
+          if (Platform.OS === "android") {
+            requestAnimationFrame(() => {
+              if (requestId !== focusRequestIdRef.current) return;
+              destRef.current?.focus();
+            });
+          }
+        });
+      }, delayMs);
+    },
+    [clearDestinationFocusTimer],
+  );
+
   const focusField = useCallback(
     (field: "origin" | "destination") => {
       cancelBlur();
       setFocusedField(field);
-      if (field === "origin") {
-        requestAnimationFrame(() => originRef.current?.focus());
-        return;
+      focusRequestIdRef.current += 1;
+      if (Platform.OS === "android") {
+        setPinMode(null);
+        if (field === "origin") {
+          originRef.current?.focus();
+        } else {
+          destRef.current?.focus();
+        }
+        // Keep a short fallback for Android/WebView timing races.
+        scheduleFieldFocus(field, 25);
+      } else {
+        scheduleFieldFocus(field, 55);
       }
-      requestAnimationFrame(() => destRef.current?.focus());
     },
-    [cancelBlur],
+    [cancelBlur, scheduleFieldFocus, setPinMode],
   );
+
+  const clearCollapseTimer = useCallback(() => {
+    if (collapseTimerRef.current) {
+      clearTimeout(collapseTimerRef.current);
+      collapseTimerRef.current = null;
+    }
+  }, []);
 
   // Expand/collapse animation
   const expand = useCallback(() => {
+    clearCollapseTimer();
+    clearDestinationFocusTimer();
     setExpanded(true);
-    Animated.spring(expandAnim, {
+    expandAnim.stopAnimation();
+    Animated.timing(expandAnim, {
       toValue: 1,
       useNativeDriver: false,
-      bounciness: 4,
-      speed: 14,
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
     }).start(() => {
-      // Auto-focus destination input after expand
-      setTimeout(() => destRef.current?.focus(), 100);
+      // Auto-focus destination after expand; cancellable by any user interaction.
+      scheduleFieldFocus("destination", 90);
     });
-  }, [expandAnim]);
+  }, [
+    expandAnim,
+    clearCollapseTimer,
+    clearDestinationFocusTimer,
+    scheduleFieldFocus,
+  ]);
 
   const collapse = useCallback(() => {
+    clearCollapseTimer();
+    clearDestinationFocusTimer();
     originRef.current?.blur();
     destRef.current?.blur();
     setFocusedField(null);
-    Animated.spring(expandAnim, {
+    expandAnim.stopAnimation();
+    Animated.timing(expandAnim, {
       toValue: 0,
       useNativeDriver: false,
-      bounciness: 4,
-      speed: 14,
+      duration: 220,
+      easing: Easing.inOut(Easing.cubic),
     }).start(() => setExpanded(false));
-  }, [expandAnim]);
+  }, [expandAnim, clearCollapseTimer, clearDestinationFocusTimer]);
+
+  const scheduleCollapse = useCallback(
+    (delayMs: number) => {
+      clearCollapseTimer();
+      collapseTimerRef.current = setTimeout(() => {
+        collapseTimerRef.current = null;
+        collapse();
+      }, delayMs);
+    },
+    [clearCollapseTimer, collapse],
+  );
+
+  const normalizedDestinationQuery = destSearch.query.trim().toLowerCase();
+  const hasDestinationSearchResults =
+    !manualDest &&
+    !destSearch.place &&
+    (destinationCandidates.length > 0 || destSearch.predictions.length > 0);
+
+  // Android: collapse once per destination query when place results are shown.
+  // This keeps repeated searches reliable even when generic hasResults stays true.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (!expanded) return;
+    if (!normalizedDestinationQuery) {
+      lastCollapsedDestinationQueryRef.current = null;
+      return;
+    }
+    if (!hasDestinationSearchResults) return;
+    if (lastCollapsedDestinationQueryRef.current === normalizedDestinationQuery) {
+      return;
+    }
+
+    scheduleCollapse(220);
+    const t = setTimeout(() => {
+      lastCollapsedDestinationQueryRef.current = normalizedDestinationQuery;
+    }, 220);
+
+    return () => clearTimeout(t);
+  }, [
+    expanded,
+    normalizedDestinationQuery,
+    hasDestinationSearchResults,
+    scheduleCollapse,
+  ]);
 
   // Auto-collapse when results appear
   useEffect(() => {
@@ -174,10 +411,38 @@ export function MobileWebSearchBar({
 
     const isTyping =
       !!originRef.current?.isFocused?.() || !!destRef.current?.isFocused?.();
-    if (gainedResults && expanded && !isTyping) {
+    const hasSelectedDestination = !!manualDest || !!destSearch.place;
+    const shouldCollapse =
+      gainedResults &&
+      expanded &&
+      (Platform.OS === "android" 
+        ? !hasDestinationSearchResults 
+        : !isTyping || hasSelectedDestination);
+    if (shouldCollapse) {
+      // On Android, delay collapse by 2s to match routes-found behaviour
+      if (Platform.OS === "android") {
+        scheduleCollapse(2000);
+        return;
+      }
       collapse();
     }
-  }, [hasResults, expanded, collapse]);
+  }, [
+    hasResults,
+    expanded,
+    collapse,
+    hasDestinationSearchResults,
+    scheduleCollapse,
+    manualDest,
+    destSearch.place,
+  ]);
+
+  useEffect(
+    () => () => {
+      clearDestinationFocusTimer();
+      clearCollapseTimer();
+    },
+    [clearDestinationFocusTimer, clearCollapseTimer],
+  );
 
   // When user taps the collapsed pill
   const handlePillPress = useCallback(() => {
@@ -248,6 +513,52 @@ export function MobileWebSearchBar({
     ],
   );
 
+  const showDestinationCandidateCards =
+    !renderCandidatesInSheet &&
+    activeField !== "origin" &&
+    !manualDest &&
+    !destSearch.place &&
+    destinationCandidates.length > 0;
+
+  const showLegacyPredictions =
+    !renderCandidatesInSheet &&
+    activePredictions.length > 0 &&
+    !showDestinationCandidateCards;
+
+  const bubbleSource = showDestinationCandidateCards
+    ? destinationCandidates
+    : activePredictions;
+
+  const categoryBubbles = useMemo(() => {
+    if (!bubbleSource || bubbleSource.length === 0) return [];
+
+    const counts = new Map<string, number>();
+    for (const prediction of bubbleSource) {
+      const category = classifyPredictionCategory(prediction);
+      if (!category) continue;
+      counts.set(category, (counts.get(category) || 0) + 1);
+    }
+
+    return CATEGORY_CHIP_DEFINITIONS
+      .map((chip) => ({
+        ...chip,
+        count: counts.get(chip.key) || 0,
+      }))
+      .filter((chip) => chip.count > 0)
+      .sort((a, b) => b.count - a.count);
+  }, [bubbleSource]);
+
+  const handleCategoryBubblePress = useCallback(
+    (categoryQuery: string) => {
+      setManualDest(null);
+      destSearch.setQuery(categoryQuery);
+      onClearRoute();
+      setFocusedField("destination");
+      requestAnimationFrame(() => destRef.current?.focus());
+    },
+    [destSearch, onClearRoute, setManualDest],
+  );
+
   // Display text for collapsed pill
   const destDisplayText = manualDest
     ? (manualDest.name ?? "Dropped pin")
@@ -272,11 +583,16 @@ export function MobileWebSearchBar({
   });
 
   return (
-    <View style={[styles.wrapper, topInset != null && { top: topInset + 8 }]}>
+    <View
+      style={[styles.wrapper, topInset != null && { top: topInset + 8 }]}
+      onLayout={handleContainerLayout}
+    >
       <Animated.View style={[styles.container, { height: containerHeight }]}>
         {/* ── Collapsed single pill ── */}
-        {!expanded && (
-          <Animated.View style={[styles.pill, { opacity: pillOpacity }]}>
+        <Animated.View
+          style={[styles.pill, { opacity: pillOpacity }]}
+          pointerEvents={expanded ? "none" : "auto"}
+        >
             <Pressable
               style={styles.pillInner}
               onPress={handlePillPress}
@@ -309,13 +625,12 @@ export function MobileWebSearchBar({
               )}
             </Pressable>
           </Animated.View>
-        )}
 
         {/* ── Expanded dual inputs ── */}
-        {expanded && (
-          <Animated.View
-            style={[styles.expandedCard, { opacity: dualOpacity }]}
-          >
+        <Animated.View
+          style={[styles.expandedCard, { opacity: dualOpacity }]}
+          pointerEvents={expanded ? "auto" : "none"}
+        >
             {/* Back / collapse button */}
             <View style={styles.expandedHeader}>
               <Pressable
@@ -353,12 +668,15 @@ export function MobileWebSearchBar({
                     styles.inputField,
                     focusedField === "origin" && styles.inputFieldFocused,
                   ]}
-                  onPress={() => {
+                  hitSlop={4}
+                  onPress={(e) => {
+                    e.stopPropagation();
                     if (onGuestTap) {
                       onGuestTap();
                       return;
                     }
                     setIsUsingCurrentLocation(false);
+                    requestAnimationFrame(() => focusField("origin"));
                   }}
                 >
                   <Ionicons
@@ -423,7 +741,13 @@ export function MobileWebSearchBar({
                         onGuestTap();
                         return;
                       }
+                      if (Platform.OS !== "android") {
+                        clearDestinationFocusTimer();
+                      }
                       cancelBlur();
+                      if (Platform.OS === "android") {
+                        setPinMode(null);
+                      }
                       setFocusedField("origin");
                     }}
                     onBlur={handleBlur}
@@ -486,6 +810,7 @@ export function MobileWebSearchBar({
                   styles.inputField,
                   focusedField === "destination" && styles.inputFieldFocused,
                 ]}
+                hitSlop={4}
                 onPress={() => {
                   if (onGuestTap) {
                     onGuestTap();
@@ -516,7 +841,13 @@ export function MobileWebSearchBar({
                       onGuestTap();
                       return;
                     }
+                    if (Platform.OS !== "android") {
+                      clearDestinationFocusTimer();
+                    }
                     cancelBlur();
+                    if (Platform.OS === "android") {
+                      setPinMode(null);
+                    }
                     setFocusedField("destination");
                   }}
                   onBlur={handleBlur}
@@ -579,6 +910,7 @@ export function MobileWebSearchBar({
                   onSave={onSavePlace}
                   onRemove={onRemoveSavedPlace}
                   onToast={onSavedPlaceToast}
+                  onPopupBottomChange={handleSavedPlacesPopupBottomChange}
                   currentDestination={
                     manualDest
                       ? {
@@ -598,12 +930,45 @@ export function MobileWebSearchBar({
                 />
               )}
           </Animated.View>
-        )}
       </Animated.View>
 
       {/* ── Predictions dropdown (only in expanded mode) ── */}
-      {expanded && activePredictions.length > 0 && (
+      {expanded && showLegacyPredictions && (
         <View style={styles.predictions}>
+          {categoryBubbles.length > 0 && (
+            <View>
+              <Text style={styles.categoryHelpText}>
+                Quick filters: tap a category to update results instantly.
+              </Text>
+              <ScrollView
+                horizontal
+                style={styles.categoryBubblesWrap}
+                contentContainerStyle={styles.categoryBubblesContent}
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="always"
+              >
+                {categoryBubbles.map((chip, _idx, arr) => {
+                  const iconOnly = arr.length > 3;
+                  return (
+                    <Pressable
+                      key={`legacy-chip-${chip.key}`}
+                      style={[
+                        styles.categoryBubble,
+                        iconOnly ? styles.categoryBubbleIconOnly : null,
+                      ]}
+                      onPress={() => handleCategoryBubblePress(chip.query)}
+                    >
+                      <Ionicons name={chip.icon} size={14} color="#1570ef" />
+                      {!iconOnly ? (
+                        <Text style={styles.categoryBubbleText}>{chip.label}</Text>
+                      ) : null}
+                      <Text style={styles.categoryBubbleCount}>{chip.count}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
           <ScrollView keyboardShouldPersistTaps="always" bounces={false}>
             {activePredictions.map((pred, idx) => (
               <Pressable
@@ -642,6 +1007,85 @@ export function MobileWebSearchBar({
           </ScrollView>
         </View>
       )}
+
+      {expanded &&
+        showDestinationCandidateCards &&
+        onSelectDestinationCandidate && (
+          <View style={styles.predictions}>
+            <View style={styles.candidatesHeader}>
+              <Text style={styles.candidatesTitle}>Related places</Text>
+            </View>
+            {categoryBubbles.length > 0 && (
+              <View>
+                <Text style={styles.categoryHelpText}>
+                  Quick filters: tap a category to update results instantly.
+                </Text>
+                <ScrollView
+                  horizontal
+                  style={styles.categoryBubblesWrap}
+                  contentContainerStyle={styles.categoryBubblesContent}
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="always"
+                >
+                  {categoryBubbles.map((chip, _idx, arr) => {
+                    const iconOnly = arr.length > 3;
+                    return (
+                      <Pressable
+                        key={`candidate-chip-${chip.key}`}
+                        style={[
+                          styles.categoryBubble,
+                          iconOnly ? styles.categoryBubbleIconOnly : null,
+                        ]}
+                        onPress={() => handleCategoryBubblePress(chip.query)}
+                      >
+                        <Ionicons name={chip.icon} size={14} color="#1570ef" />
+                        {!iconOnly ? (
+                          <Text style={styles.categoryBubbleText}>{chip.label}</Text>
+                        ) : null}
+                        <Text style={styles.categoryBubbleCount}>{chip.count}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+            <ScrollView keyboardShouldPersistTaps="always" bounces={false}>
+              {destinationCandidates.map((pred, idx) => {
+                const selected = pred.placeId === selectedDestinationCandidateId;
+                return (
+                  <Pressable
+                    key={`candidate-${pred.placeId}`}
+                    style={({ pressed }) => [
+                      styles.predItem,
+                      idx === destinationCandidates.length - 1 && styles.predItemLast,
+                      selected && styles.candidateItemSelected,
+                      pressed && styles.predItemPressed,
+                    ]}
+                    onPress={() => onSelectDestinationCandidate(pred.placeId, true)}
+                  >
+                    <View style={styles.predIcon}>
+                      <Ionicons
+                        name={selected ? "radio-button-on" : "radio-button-off"}
+                        size={16}
+                        color={selected ? "#1570ef" : "#667085"}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.predPrimary} numberOfLines={1}>
+                        {pred.primaryText}
+                      </Text>
+                      {pred.secondaryText ? (
+                        <Text style={styles.predSecondary} numberOfLines={1}>
+                          {pred.secondaryText}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
     </View>
   );
 }
@@ -654,8 +1098,8 @@ const styles = StyleSheet.create({
     top: Platform.OS === "android" ? 12 : 32,
     left: 0,
     right: 0,
-    zIndex: 50,
-    ...(Platform.OS === "android" ? { elevation: 50 } : {}),
+    zIndex: Platform.OS === 'web' ? 1600 : 260,
+    ...(Platform.OS === "android" ? { elevation: 260 } : {}),
     alignItems: "center",
     paddingHorizontal: 12,
   },
@@ -833,6 +1277,77 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e5e7eb",
   } as any,
+  candidatesHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+  },
+  categoryBubblesWrap: {
+    maxHeight: 46,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f2f4f7",
+  },
+  categoryBubblesContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+    alignItems: "center",
+  },
+  categoryHelpText: {
+    fontSize: 11,
+    color: "#475467",
+    fontWeight: "500",
+    paddingHorizontal: 10,
+    paddingTop: 8,
+  },
+  categoryBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    backgroundColor: "#eff6ff",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    minWidth: 0,
+  },
+  categoryBubbleIconOnly: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    gap: 4,
+    borderRadius: 8,
+  },
+  categoryBubbleText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1d4ed8",
+    flexShrink: 1,
+  },
+  categoryBubbleCount: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#1570ef",
+    backgroundColor: "#dbeafe",
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  candidatesTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#344054",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  candidateItemSelected: {
+    backgroundColor: "#eff8ff",
+  },
   predItem: {
     flexDirection: "row",
     alignItems: "center",

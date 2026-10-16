@@ -9,7 +9,6 @@
 #   EXPO_PUBLIC_USER_API_URL          = https://safenighthome-user.onrender.com
 #   EXPO_PUBLIC_SUBSCRIPTION_API_URL  = https://safenighthome-subscription.onrender.com
 #   EXPO_PUBLIC_OSM_USER_AGENT        = SafeNightHome/1.0
-#   EXPO_PUBLIC_OPENAI_API_KEY        = sk-...
 
 # ── Security & SEO Headers (all pages) ──────────────────────────────────
 [[headers]]

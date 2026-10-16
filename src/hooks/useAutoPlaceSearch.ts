@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchPlaceDetails, fetchPlacePredictions } from '@/src/services/osmDirections';
 import { AppError } from '@/src/types/errors';
-import type { LatLng, PlaceDetails, PlacePrediction } from '@/src/types/google';
+import type { LatLng, PlaceDetails, PlacePrediction } from '@/src/types/geo';
 
 export type AutoSearchStatus = 'idle' | 'searching' | 'found' | 'error';
 
@@ -23,6 +23,7 @@ export interface UseAutoPlaceSearchReturn {
   predictions: PlacePrediction[];
   status: AutoSearchStatus;
   error: AppError | null;
+  lastSuccessfulRadiusMiles: number | null;
   /** Select a specific prediction from the dropdown */
   selectPrediction: (prediction: PlacePrediction) => void;
   /** Clear selected place (e.g. user taps ✕) */
@@ -31,12 +32,14 @@ export interface UseAutoPlaceSearchReturn {
 
 export const useAutoPlaceSearch = (
   locationBias?: LatLng | null,
+  options?: { subscriptionTier?: string; radiusMiles?: number },
 ): UseAutoPlaceSearchReturn => {
   const [query, setQuery] = useState('');
   const [place, setPlace] = useState<PlaceDetails | null>(null);
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [status, setStatus] = useState<AutoSearchStatus>('idle');
   const [error, setError] = useState<AppError | null>(null);
+  const [lastSuccessfulRadiusMiles, setLastSuccessfulRadiusMiles] = useState<number | null>(null);
 
   // Track whether the user is actively editing (vs. programmatic set)
   const skipAutoRef = useRef(false);
@@ -57,8 +60,11 @@ export const useAutoPlaceSearch = (
     }
     skipAutoRef.current = false;
     setPlace(null);
+    // Clear stale suggestions immediately so UI reflects the current query.
+    setPredictions([]);
     setError(null);
     setStatus('idle');
+    setLastSuccessfulRadiusMiles(null);
     setQuery(q);
   }, []);
 
@@ -98,7 +104,46 @@ export const useAutoPlaceSearch = (
     setPredictions([]);
     setError(null);
     setStatus('idle');
+    setLastSuccessfulRadiusMiles(null);
   }, []);
+
+  type ProgressiveSearchResult = {
+    results: PlacePrediction[];
+    successfulRadiusMiles: number | null;
+  };
+
+  /**
+   * Progressive search: try expanding radii if initial search returns no results
+   * Sequence: initial → 2x → 5x → 10x → search globally
+   */
+  const performProgressiveSearch = useCallback(
+    async (searchQuery: string, _initialRadiusMiles: number): Promise<ProgressiveSearchResult> => {
+      const tier = (options?.subscriptionTier || 'free').toLowerCase();
+      
+      // Progressive radius stages aligned with the visible distance filter.
+      const radiusStages = [1, 2, 3, 5, 10];
+      
+      for (const radiusMiles of radiusStages) {
+        const radiusMeters = Math.round(radiusMiles * 1609.34);
+        const results = await fetchPlacePredictions(searchQuery, {
+          locationBias: locationBias ?? undefined,
+          radiusMeters: locationBias ? radiusMeters : undefined,
+          subscriptionTier: tier,
+        });
+        
+        if (results.length > 0) {
+          return { results, successfulRadiusMiles: radiusMiles };
+        }
+      }
+      
+      // Last attempt: search globally without radius
+      const globalResults = await fetchPlacePredictions(searchQuery, {
+        subscriptionTier: tier,
+      });
+      return { results: globalResults, successfulRadiusMiles: null };
+    },
+    [options?.subscriptionTier, locationBias],
+  );
 
   useEffect(() => {
     if (skipAutoRef.current) return;
@@ -119,24 +164,35 @@ export const useAutoPlaceSearch = (
       // Only update status once the user has paused — avoids a state update on every keystroke
       setStatus('searching');
       try {
-        const results = await fetchPlacePredictions(trimmed, {
-          locationBias: locationBias ?? undefined,
-          radiusMeters: locationBias ? 5000 : undefined,
-        });
+        const tier = (options?.subscriptionTier || 'free').toLowerCase();
+        const radiusMiles = options?.radiusMiles ?? 1;
+        
+        // Use progressive search if location bias is available
+        const searchResult = locationBias
+          ? await performProgressiveSearch(trimmed, radiusMiles)
+          : {
+              results: await fetchPlacePredictions(trimmed, {
+                subscriptionTier: tier,
+              }),
+              successfulRadiusMiles: null,
+            };
 
-        if (results.length === 0) {
+        if (searchResult.results.length === 0) {
           setStatus('error');
           setPredictions([]);
-          setError(new AppError('no_results', 'No places found'));
+          setLastSuccessfulRadiusMiles(null);
+          setError(new AppError('no_results', 'No places found anywhere'));
           return;
         }
 
         // Expose all predictions for the dropdown — user must click to select
-        setPredictions(results);
+        setPredictions(searchResult.results);
+        setLastSuccessfulRadiusMiles(searchResult.successfulRadiusMiles);
         setStatus('idle');
       } catch (e) {
         setStatus('error');
         setPredictions([]);
+        setLastSuccessfulRadiusMiles(null);
         setError(
           e instanceof AppError
             ? e
@@ -146,7 +202,16 @@ export const useAutoPlaceSearch = (
     }, 700);
 
     return () => clearTimeout(timer);
-  }, [query, locationBias?.latitude, locationBias?.longitude, place]);
+  }, [
+    query,
+    locationBias,
+    locationBias?.latitude,
+    locationBias?.longitude,
+    place,
+    options?.subscriptionTier,
+    options?.radiusMiles,
+    performProgressiveSearch,
+  ]);
 
-  return { query, setQuery: setQueryWrapped, place, predictions, status, error, selectPrediction, clear };
+  return { query, setQuery: setQueryWrapped, place, predictions, status, error, lastSuccessfulRadiusMiles, selectPrediction, clear };
 };

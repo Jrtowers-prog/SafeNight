@@ -22,9 +22,11 @@ export interface ToastConfig {
 interface Props {
   toast: ToastConfig | null;
   onDismiss: () => void;
+  webTopOffset?: number;
+  webLeftOffset?: number;
 }
 
-export function MapToast({ toast, onDismiss }: Props) {
+export function MapToast({ toast, onDismiss, webTopOffset = 12, webLeftOffset = 0 }: Props) {
   const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(120)).current;
   const dragAnim = useRef(new Animated.Value(0)).current;
@@ -165,7 +167,9 @@ export function MapToast({ toast, onDismiss }: Props) {
       style={[
         styles.container,
         {
-          bottom: insets.bottom + 24,
+          ...(Platform.OS === 'web'
+            ? { top: insets.top + webTopOffset, left: 16 + webLeftOffset, right: 16, bottom: 'auto' as any }
+            : { bottom: insets.bottom + 24 }),
           backgroundColor: toast.bgColor ?? 'rgba(30, 30, 46, 0.95)',
           transform: [{ translateY: Animated.add(slideAnim, dragAnim) }],
           opacity: opacityAnim,
