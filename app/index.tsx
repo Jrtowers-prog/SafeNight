@@ -1639,7 +1639,7 @@ export default function HomeScreen() {
                 Unable to load your profile
               </Text>
               <Text style={styles.profileFailBody}>
-                Your session is active but we couldn't retrieve your data.{"\n"}
+                Your session is active but we couldn&apos;t retrieve your data.{"\n"}
                 Logging you out automatically…
               </Text>
             </View>

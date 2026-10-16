@@ -17,6 +17,7 @@ import { useAutoPlaceSearch } from "@/src/hooks/useAutoPlaceSearch";
 import { useCurrentLocation } from "@/src/hooks/useCurrentLocation";
 import { useNavigation } from "@/src/hooks/useNavigation";
 import { useOnboarding } from "@/src/hooks/useOnboarding";
+import { usePathfindingVisualization } from "@/src/hooks/usePathfindingVisualization";
 import { useSafeRoutes } from "@/src/hooks/useSafeRoutes";
 import { reverseGeocode } from "@/src/services/openStreetMap";
 import type { SafeRoute, SafetyLevel } from "@/src/services/safeRoutes";
@@ -156,6 +157,18 @@ export function useHomeScreen() {
       dLng: routingDestination.longitude,
     });
   }, [directionsStatus, effectiveOrigin, routingDestination]);
+
+  // Live progress needs the search identity (id/client/seq) that the safe-routes
+  // request sends. The client does not send those headers yet, so the stream
+  // stays idle and progress stays null until that wiring is added.
+  const pathViz = usePathfindingVisualization(
+    effectiveOrigin,
+    routingDestination,
+    directionsStatus === "loading",
+    null,
+    null,
+    null,
+  );
 
   // ── Route scores ──
   const routeScores: Record<string, RouteScore> = useMemo(() => {
@@ -603,6 +616,8 @@ export function useHomeScreen() {
 
     // Pathfinding visualisation
     vizStreamUrl,
+    vizProgressPct: directionsStatus === "loading" ? pathViz.pct : null,
+    vizProgressMessage: directionsStatus === "loading" ? pathViz.message : null,
 
     // Sheet
     sheetHeight,

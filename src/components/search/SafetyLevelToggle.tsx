@@ -21,6 +21,7 @@ export function SafetyLevelToggle({ value, onChange }: SafetyLevelToggleProps) {
       onPress={() => onChange(isExtra ? 'standard' : 'extra')}
       accessibilityRole="switch"
       accessibilityState={{ checked: isExtra }}
+      aria-checked={isExtra}
       accessibilityLabel="Extra safety data"
       hitSlop={8}
     >

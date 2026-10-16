@@ -450,6 +450,7 @@ export const RouteMap = ({
   const prevGeoKeyRef = useRef("");
   const prevPanKeyRef = useRef(-1);
   const prevVizUrlRef = useRef<string | null>(null);
+  const prevMapTypeRef = useRef<string | null>(null);
 
   const callbacksRef = useRef({
     onMapPress,
