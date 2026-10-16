@@ -9,8 +9,8 @@
     "web": "expo start --web",
     "build:web": "npx expo export --platform web",
     "lint": "expo lint",
-    "build:android": "eas build --platform android --profile production",
-    "build:android:local": "ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk eas build --platform android --profile production --local",
+    "build:android": "node ./scripts/bump-android-version-code.js && eas build --platform android --profile production",
+    "build:android:local": "node ./scripts/bump-android-version-code.js && ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk eas build --platform android --profile production --local",
     "submit:android": "eas submit --platform android",
     "update": "eas update --branch production",
     "update:android": "eas update --platform android --branch production"
@@ -55,9 +55,22 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "cli-cursor": "^2.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
+  },
+  "expo": {
+    "doctor": {
+      "appConfigFieldsNotSyncedCheck": {
+        "enabled": false
+      },
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "expo-pip"
+        ]
+      }
+    }
   },
   "private": true
 }

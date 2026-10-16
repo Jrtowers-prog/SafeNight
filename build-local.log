@@ -1,0 +1,13 @@
+
+> plymhack2026new@1.0.0 build:android:local
+> node ./scripts/bump-android-version-code.js && ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk eas build --platform android --profile production --local --clear-cache --verbose
+
+[version] Android VERSION_CODE bumped: 39 -> 40
+★ eas-cli@18.3.0 is now available.
+To upgrade, run:
+npm install -g eas-cli
+Proceeding with outdated version.
+
+Unexpected argument: --verbose
+See more help with --help
+    Error: build command failed.

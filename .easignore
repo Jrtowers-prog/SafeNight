@@ -10,7 +10,6 @@ docs/
 .expo
 .idea
 .vscode
-/android/
 dist
 /ios
 .env

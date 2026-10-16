@@ -1,8 +1,42 @@
+const fs = require('fs');
+const path = require('path');
+
+function readAndroidVersionProps() {
+  const versionFile = path.join(__dirname, 'android', 'version.properties');
+  let versionCode = 1;
+  let versionName = '1.0.0';
+
+  try {
+    const raw = fs.readFileSync(versionFile, 'utf8');
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const [key, ...rest] = trimmed.split('=');
+      const value = rest.join('=').trim();
+      if (key === 'VERSION_CODE') {
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isFinite(parsed) && parsed > 0) versionCode = parsed;
+      }
+      if (key === 'VERSION_NAME' && value) {
+        versionName = value;
+      }
+    }
+  } catch {
+    // Fallback to defaults if file is missing or unreadable
+  }
+
+  return { versionCode, versionName };
+}
+
 module.exports = ({ config }) => {
+  const { versionCode, versionName } = readAndroidVersionProps();
+
   return {
     ...config,
+    version: versionName,
     ios: {
       ...config.ios,
+      buildNumber: versionName,
       infoPlist: {
         ...config.ios?.infoPlist,
         NSLocationWhenInUseUsageDescription:
@@ -16,6 +50,7 @@ module.exports = ({ config }) => {
     },
     android: {
       ...config.android,
+      versionCode,
       permissions: Array.from(
         new Set([
           ...(config.android?.permissions ?? []),

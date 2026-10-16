@@ -1,20 +1,24 @@
 /**
- * RouteMap.native — MapLibre GL JS in a WebView (100% free, no API key).
+ * RouteMap.native — MapLibre GL JS in a WebView.
  *
- * Uses OpenFreeMap vector tiles for true 3D buildings, pitch, and bearing.
- * Navigation mode: 60° pitch, heading-following camera, 3D building extrusions.
+ * Uses MapTiler vector style for 3D buildings, pitch, and bearing.
+ * Falls back to OpenFreeMap when no MapTiler key is configured.
  */
-import { useCallback, useEffect, useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import { useCallback, useEffect, useRef } from "react";
+import { StyleSheet, View } from "react-native";
+import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
-import type { RouteMapProps } from '@/src/components/maps/RouteMap.types';
+import {
+  OPENFREEMAP_VECTOR_STYLE_URL,
+  ROADMAP_STYLE,
+} from "@/src/components/maps/mapConstants";
+import type { RouteMapProps } from "@/src/components/maps/RouteMap.types";
 
 // ---------------------------------------------------------------------------
 // Build the HTML page that runs MapLibre GL JS inside the WebView
 // ---------------------------------------------------------------------------
 
-const buildMapHtml = (_mapType: string = 'roadmap') => `
+const buildMapHtml = (_mapType: string = "roadmap") => `
 <!DOCTYPE html>
 <html>
 <head>
@@ -111,13 +115,37 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       sendMsg('navFollowChanged', { isFollowing: next });
     }
 
-    /* ── Styles (all free, no API key) ─────────────────────── */
+    /* ── Styles ─────────── */
     var mapStyles = {
-      roadmap: 'https://tiles.openfreemap.org/styles/liberty',
+      roadmap: ${JSON.stringify(ROADMAP_STYLE)},
       satellite: { version:8, sources:{ sat:{ type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:18 }}, layers:[{id:'sat',type:'raster',source:'sat'}] },
       terrain: { version:8, sources:{ topo:{ type:'raster', tiles:['https://tile.opentopomap.org/{z}/{x}/{y}.png'], tileSize:256, maxzoom:17 }}, layers:[{id:'topo',type:'raster',source:'topo'}] },
       hybrid: { version:8, sources:{ sat:{ type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:18 }}, layers:[{id:'sat',type:'raster',source:'sat'}] }
     };
+    var roadmapFallbackStyle = ${JSON.stringify(OPENFREEMAP_VECTOR_STYLE_URL)};
+    var roadmapStyleIndex = 0;
+    var styleFallbackTimer = null;
+
+    function clearStyleFallbackTimer() {
+      if (styleFallbackTimer) {
+        clearTimeout(styleFallbackTimer);
+        styleFallbackTimer = null;
+      }
+    }
+
+    function setRoadmapStyleWithFallback(nextIndex) {
+      var styleCandidates = [mapStyles.roadmap, roadmapFallbackStyle];
+      roadmapStyleIndex = Math.max(0, Math.min(nextIndex, styleCandidates.length - 1));
+      styleReady = false;
+      clearStyleFallbackTimer();
+      map.setStyle(styleCandidates[roadmapStyleIndex]);
+      styleFallbackTimer = setTimeout(function() {
+        if (styleReady) return;
+        if (roadmapStyleIndex < styleCandidates.length - 1) {
+          setRoadmapStyleWithFallback(roadmapStyleIndex + 1);
+        }
+      }, 6000);
+    }
 
     /* ── Init MapLibre ─────────────────────────────────────── */
     var map = new maplibregl.Map({
@@ -131,6 +159,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
       antialias: true,
       attributionControl: false,
     });
+    setRoadmapStyleWithFallback(0);
 
     // Disable rotation in normal mode (enable only in nav mode)
     map.dragRotate.disable();
@@ -225,8 +254,26 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
         paint:{'line-color':['get','color'],'line-opacity':0.7,'line-width':5} });
     }
 
+    function resolveBuildingSource() {
+      var style = map.getStyle();
+      if (!style || !style.layers) return null;
+      for (var i = 0; i < style.layers.length; i++) {
+        var layer = style.layers[i];
+        if (layer && layer.source && layer['source-layer'] === 'building') {
+          return { source: layer.source, sourceLayer: 'building' };
+        }
+      }
+      var hasOpenMapTilesSource = style.sources && style.sources.openmaptiles;
+      if (hasOpenMapTilesSource) return { source: 'openmaptiles', sourceLayer: 'building' };
+      return null;
+    }
+
     function add3DBuildings() {
       try {
+        if (map.getLayer('3d-buildings')) return;
+        var buildingSource = resolveBuildingSource();
+        if (!buildingSource) return;
+
         // Find first symbol layer for insertion point
         var layers = map.getStyle().layers || [];
         var labelId;
@@ -234,7 +281,7 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
           if(layers[i].type==='symbol'&&layers[i].layout&&layers[i].layout['text-field']){labelId=layers[i].id;break}
         }
         map.addLayer({
-          id:'3d-buildings', source:'openmaptiles', 'source-layer':'building',
+          id:'3d-buildings', source:buildingSource.source, 'source-layer':buildingSource.sourceLayer,
           type:'fill-extrusion', minzoom:14,
           paint:{
             'fill-extrusion-color':['interpolate',['linear'],['zoom'],14,'#ddd8d0',16.5,'#c8c3bb'],
@@ -249,10 +296,19 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
     /* ── Map load ──────────────────────────────────────────── */
     map.on('load',function(){
       styleReady = true;
+      clearStyleFallbackTimer();
       addCustomSources();
       addCustomLayers();
       add3DBuildings();
       sendMsg('ready',{});
+    });
+
+    map.on('error', function() {
+      if (styleReady) return;
+      var styleCandidates = [mapStyles.roadmap, roadmapFallbackStyle];
+      if (roadmapStyleIndex < styleCandidates.length - 1) {
+        setRoadmapStyleWithFallback(roadmapStyleIndex + 1);
+      }
     });
 
     /* ── Click / Long-press events ─────────────────────────── */
@@ -652,11 +708,17 @@ const buildMapHtml = (_mapType: string = 'roadmap') => `
 
     /* ── Map type switching — */
     function setMapType(type){
+      if(type==='roadmap'){
+        setRoadmapStyleWithFallback(0);
+        return;
+      }
       var s=mapStyles[type]||mapStyles.roadmap;
       styleReady=false;
+      clearStyleFallbackTimer();
       map.setStyle(s);
       map.once('idle',function(){
         styleReady=true;
+        clearStyleFallbackTimer();
         addCustomSources();
         addCustomLayers();
         if(type==='roadmap') add3DBuildings();
@@ -815,7 +877,7 @@ export const RouteMap = ({
   isNavigating = false,
   navigationLocation,
   navigationHeading,
-  mapType = 'roadmap',
+  mapType = "roadmap",
   maxDistanceKm,
   friendMarkers = [],
   isInPipMode = false,
@@ -830,28 +892,58 @@ export const RouteMap = ({
 }: RouteMapProps) => {
   const webViewRef = useRef<WebView>(null);
   const readyRef = useRef(false);
-  const prevGeoKeyRef = useRef('');
+  const prevGeoKeyRef = useRef("");
   const prevPanKeyRef = useRef(-1);
 
   // Keep latest props in refs so pushUpdate always reads fresh values
   // (fixes the stale-closure problem when called from the 'ready' handler)
   const propsRef = useRef({
-    origin, destination, routes, selectedRouteId,
-    safetyMarkers, routeSegments, roadLabels, panTo,
-    isNavigating, navigationLocation, navigationHeading, maxDistanceKm,
-    friendMarkers, isInPipMode,
+    origin,
+    destination,
+    routes,
+    selectedRouteId,
+    safetyMarkers,
+    routeSegments,
+    roadLabels,
+    panTo,
+    isNavigating,
+    navigationLocation,
+    navigationHeading,
+    maxDistanceKm,
+    friendMarkers,
+    isInPipMode,
   });
   propsRef.current = {
-    origin, destination, routes, selectedRouteId,
-    safetyMarkers, routeSegments, roadLabels, panTo,
-    isNavigating, navigationLocation, navigationHeading, maxDistanceKm,
-    friendMarkers, isInPipMode,
+    origin,
+    destination,
+    routes,
+    selectedRouteId,
+    safetyMarkers,
+    routeSegments,
+    roadLabels,
+    panTo,
+    isNavigating,
+    navigationLocation,
+    navigationHeading,
+    maxDistanceKm,
+    friendMarkers,
+    isInPipMode,
   };
 
   const mapTypeRef = useRef(mapType);
 
-  const callbacksRef = useRef({ onMapPress, onLongPress, onSelectRoute, onNavigationFollowChange });
-  callbacksRef.current = { onMapPress, onLongPress, onSelectRoute, onNavigationFollowChange };
+  const callbacksRef = useRef({
+    onMapPress,
+    onLongPress,
+    onSelectRoute,
+    onNavigationFollowChange,
+  });
+  callbacksRef.current = {
+    onMapPress,
+    onLongPress,
+    onSelectRoute,
+    onNavigationFollowChange,
+  };
 
   // Serialize current props → a JS call the WebView can execute
   const pushUpdate = useCallback(() => {
@@ -890,11 +982,13 @@ export const RouteMap = ({
 
     // Detect geography changes to decide whether to fitBounds
     const geoKey = [
-      p.origin ? `${p.origin.latitude},${p.origin.longitude}` : '',
-      p.destination ? `${p.destination.latitude},${p.destination.longitude}` : '',
-      p.routes.map((r) => r.id).join(','),
-      p.selectedRouteId ?? '',
-    ].join('|');
+      p.origin ? `${p.origin.latitude},${p.origin.longitude}` : "",
+      p.destination
+        ? `${p.destination.latitude},${p.destination.longitude}`
+        : "",
+      p.routes.map((r) => r.id).join(","),
+      p.selectedRouteId ?? "",
+    ].join("|");
     const fitBounds = geoKey !== prevGeoKeyRef.current;
     if (fitBounds) prevGeoKeyRef.current = geoKey;
 
@@ -962,7 +1056,7 @@ export const RouteMap = ({
   useEffect(() => {
     if (!readyRef.current || !webViewRef.current) return;
     webViewRef.current.injectJavaScript(
-      `try{window.setPipMode(${isInPipMode ? 'true' : 'false'})}catch(e){}true;`
+      `try{window.setPipMode(${isInPipMode ? "true" : "false"})}catch(e){}true;`,
     );
   }, [isInPipMode]);
 
@@ -976,24 +1070,26 @@ export const RouteMap = ({
       const js = `try{window.startVizStream(${JSON.stringify(vizStreamUrl)})}catch(e){}true;`;
       webViewRef.current.injectJavaScript(js);
     } else {
-      webViewRef.current.injectJavaScript('try{window.stopVizStream()}catch(e){}true;');
+      webViewRef.current.injectJavaScript(
+        "try{window.stopVizStream()}catch(e){}true;",
+      );
     }
   }, [vizStreamUrl]);
 
   useEffect(() => {
     if (!readyRef.current || !webViewRef.current) return;
     const pct =
-      typeof vizProgressPct === 'number' && Number.isFinite(vizProgressPct)
+      typeof vizProgressPct === "number" && Number.isFinite(vizProgressPct)
         ? Math.max(0, Math.min(100, vizProgressPct))
         : null;
-    const js = `try{window.setVizProgress&&window.setVizProgress(${pct == null ? 'null' : pct},${JSON.stringify(vizProgressMessage ?? '')})}catch(e){}true;`;
+    const js = `try{window.setVizProgress&&window.setVizProgress(${pct == null ? "null" : pct},${JSON.stringify(vizProgressMessage ?? "")})}catch(e){}true;`;
     webViewRef.current.injectJavaScript(js);
   }, [vizProgressPct, vizProgressMessage]);
 
   useEffect(() => {
     if (!readyRef.current || !webViewRef.current) return;
     webViewRef.current.injectJavaScript(
-      'try{window.recenterNavigation&&window.recenterNavigation()}catch(e){}true;'
+      "try{window.recenterNavigation&&window.recenterNavigation()}catch(e){}true;",
     );
   }, [recenterSignal]);
 
@@ -1012,21 +1108,21 @@ export const RouteMap = ({
         const msg = JSON.parse(event.nativeEvent.data);
         const cbs = callbacksRef.current;
         switch (msg.type) {
-          case 'ready':
+          case "ready":
             readyRef.current = true;
             // Flush update now that the map is ready
             pushUpdate();
             break;
-          case 'press':
+          case "press":
             cbs.onMapPress?.({ latitude: msg.lat, longitude: msg.lng });
             break;
-          case 'longpress':
+          case "longpress":
             cbs.onLongPress?.({ latitude: msg.lat, longitude: msg.lng });
             break;
-          case 'selectRoute':
+          case "selectRoute":
             cbs.onSelectRoute?.(msg.id);
             break;
-          case 'navFollowChanged':
+          case "navFollowChanged":
             cbs.onNavigationFollowChange?.(Boolean(msg.isFollowing));
             break;
         }
@@ -1043,7 +1139,7 @@ export const RouteMap = ({
         ref={webViewRef}
         source={{ html: buildMapHtml(mapType) }}
         style={{ flex: 1 }}
-        originWhitelist={['*']}
+        originWhitelist={["*"]}
         javaScriptEnabled
         domStorageEnabled
         onMessage={handleMessage}
@@ -1065,7 +1161,11 @@ export const RouteMap = ({
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#e8eaed', overflow: 'hidden' as const },
+  container: {
+    flex: 1,
+    backgroundColor: "#e8eaed",
+    overflow: "hidden" as const,
+  },
 });
 
 export default RouteMap;

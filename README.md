@@ -12,126 +12,126 @@ Built with **React Native (Expo SDK 54)**, **TypeScript**, and a **5-microservic
 
 ### 🗺️ Routing & Safety
 
-| Feature | Description |
-|---|---|
-| **Graph-based safe routing** | Builds a full OSM walking graph from Overpass data and runs A\* pathfinding with a safety-weighted cost function to find 3–5 optimally safe route alternatives. |
-| **6-factor safety scoring** | Every graph edge is scored on **crime density, street lighting, CCTV coverage, road type, open businesses, and foot traffic** — with time-adaptive weights that shift for late night vs. daytime. |
-| **Colour-coded segments** | Routes are split into ~50 m chunks and rendered green / yellow / red on the map so risk hotspots are visible at a glance. |
-| **Safety panel & profile chart** | Detailed breakdown of per-factor scores with a visual safety profile chart. |
-| **Dead-end detection** | Nodes with degree ≤ 1 receive a safety penalty. Dead ends are flagged to users. |
-| **K-diverse routes** | After finding the safest route, penalises used edges by +0.15 and re-runs A\*; filters duplicates by >85% edge overlap. |
-| **Crime severity weighting** | Not all crimes are equal — violent crime/robbery = 1.0, shoplifting = 0.2. |
+| Feature                          | Description                                                                                                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Graph-based safe routing**     | Builds a full OSM walking graph from Overpass data and runs A\* pathfinding with a safety-weighted cost function to find 3–5 optimally safe route alternatives.                                   |
+| **6-factor safety scoring**      | Every graph edge is scored on **crime density, street lighting, CCTV coverage, road type, open businesses, and foot traffic** — with time-adaptive weights that shift for late night vs. daytime. |
+| **Colour-coded segments**        | Routes are split into ~50 m chunks and rendered green / yellow / red on the map so risk hotspots are visible at a glance.                                                                         |
+| **Safety panel & profile chart** | Detailed breakdown of per-factor scores with a visual safety profile chart.                                                                                                                       |
+| **Dead-end detection**           | Nodes with degree ≤ 1 receive a safety penalty. Dead ends are flagged to users.                                                                                                                   |
+| **K-diverse routes**             | After finding the safest route, penalises used edges by +0.15 and re-runs A\*; filters duplicates by >85% edge overlap.                                                                           |
+| **Crime severity weighting**     | Not all crimes are equal — violent crime/robbery = 1.0, shoplifting = 0.2.                                                                                                                        |
 
 ### 🧭 Navigation
 
-| Feature | Description |
-|---|---|
+| Feature                     | Description                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Turn-by-turn navigation** | Full walking navigation with live GPS tracking, off-route detection (>100 m), arrival detection (40 m), and step-by-step instructions. |
-| **Compass heading** | Real compass via magnetometer (EMA-smoothed), with GPS heading fallback. |
-| **Roundabout detection** | Short segment groups with ≥3 segments and >120° total bearing change → "At the roundabout" instruction. |
-| **Road name merging** | Consecutive segments on the same road are merged. Short unnamed junctions are absorbed. |
+| **Compass heading**         | Real compass via magnetometer (EMA-smoothed), with GPS heading fallback.                                                               |
+| **Roundabout detection**    | Short segment groups with ≥3 segments and >120° total bearing change → "At the roundabout" instruction.                                |
+| **Road name merging**       | Consecutive segments on the same road are merged. Short unnamed junctions are absorbed.                                                |
 
 ### 🤖 AI Features
 
-| Feature | Description |
-|---|---|
-| **AI safety explanation** | GPT-4o-mini generates a plain-English summary explaining *why* the safest route was chosen, referencing specific safety metrics (crime counts, lit roads, CCTV, etc.). |
-| **Client-side caching** | AI explanations are cached per route combination — repeat requests return instantly. |
+| Feature                   | Description                                                                                                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **AI safety explanation** | GPT-4o-mini generates a plain-English summary explaining _why_ the safest route was chosen, referencing specific safety metrics (crime counts, lit roads, CCTV, etc.). |
+| **Client-side caching**   | AI explanations are cached per route combination — repeat requests return instantly.                                                                                   |
 
 ### 👤 User Accounts & Auth
 
-| Feature | Description |
-|---|---|
-| **Passwordless magic link login** | Email → 6-digit OTP code → verify. No passwords. |
-| **Session management** | Access + refresh tokens with proactive refresh 2 min before expiry. |
-| **Username system** | Unique usernames (3–20 chars) for QR code pairing in the Safety Circle. |
-| **Profile sync** | Tracks app version + platform on every login. |
-| **Account deletion** | Full GDPR-compliant permanent deletion (Google Play compliance). |
-| **Foreground revalidation** | Revalidates session on app foreground (native) or tab visibility change (web). |
+| Feature                           | Description                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------ |
+| **Passwordless magic link login** | Email → 6-digit OTP code → verify. No passwords.                               |
+| **Session management**            | Access + refresh tokens with proactive refresh 2 min before expiry.            |
+| **Username system**               | Unique usernames (3–20 chars) for QR code pairing in the Safety Circle.        |
+| **Profile sync**                  | Tracks app version + platform on every login.                                  |
+| **Account deletion**              | Full GDPR-compliant permanent deletion (Google Play compliance).               |
+| **Foreground revalidation**       | Revalidates session on app foreground (native) or tab visibility change (web). |
 
 ### 🛡️ Safety Circle (Buddy System)
 
-| Feature | Description |
-|---|---|
-| **QR code pairing** | User's QR code contains `safenight://username`. Friends scan it to send a contact request. |
-| **Contact requests** | Invite → accept / reject / block flow with pending request list. |
-| **Emergency contacts list** | Shows all accepted contacts with live status indicator. |
-| **Live status indicators** | Green pulse animation when a contact is actively walking. |
+| Feature                     | Description                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------ |
+| **QR code pairing**         | User's QR code contains `safenight://username`. Friends scan it to send a contact request. |
+| **Contact requests**        | Invite → accept / reject / block flow with pending request list.                           |
+| **Emergency contacts list** | Shows all accepted contacts with live status indicator.                                    |
+| **Live status indicators**  | Green pulse animation when a contact is actively walking.                                  |
 
 ### 📍 Live Location Sharing
 
-| Feature | Description |
-|---|---|
-| **Live sessions** | Automatically starts a live tracking session when navigation begins. Shares current location, destination, and planned route path with Safety Circle contacts. |
-| **Real-time updates** | GPS position sent to server every 5 seconds. |
-| **Heartbeat** | Server heartbeat every 15 seconds to keep session marked alive (even if stationary). |
-| **Breadcrumb trail** | Contact's actual GPS path shown on the map. Deduplicated to ~1 m precision. |
-| **Planned route display** | Contact's planned route polyline is shared at session start and visible to watchers. |
-| **Background location** | Google Play-compliant: prominent disclosure modal before system permission prompt. |
-| **Push notifications** | Expo push notifications registered on login. Android notification channel configured. |
+| Feature                   | Description                                                                                                                                                    |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Live sessions**         | Automatically starts a live tracking session when navigation begins. Shares current location, destination, and planned route path with Safety Circle contacts. |
+| **Real-time updates**     | GPS position sent to server every 5 seconds.                                                                                                                   |
+| **Heartbeat**             | Server heartbeat every 15 seconds to keep session marked alive (even if stationary).                                                                           |
+| **Breadcrumb trail**      | Contact's actual GPS path shown on the map. Deduplicated to ~1 m precision.                                                                                    |
+| **Planned route display** | Contact's planned route polyline is shared at session start and visible to watchers.                                                                           |
+| **Background location**   | Google Play-compliant: prominent disclosure modal before system permission prompt.                                                                             |
+| **Push notifications**    | Expo push notifications registered on login. Android notification channel configured.                                                                          |
 
 ### 🚨 User-Generated Reports
 
-| Feature | Description |
-|---|---|
-| **Two-step report flow** | Step 1: "Hazard" or "Safety Data". Step 2: Pick category + follow-up questions + optional description. |
-| **Hazard categories** | Poor Lighting, Unsafe Area, Obstruction, Harassment, Suspicious Activity, Dead End, Other. |
-| **Safety data categories** | CCTV Camera, Street Light, Bus Stop, Safe Space/Shop. |
-| **CCTV detail capture** | Type (dome/shop/police/residential/traffic), coverage, height, compass direction. |
-| **Nearby reports** | Fetch reports within a radius for proximity-based display. |
+| Feature                    | Description                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Two-step report flow**   | Step 1: "Hazard" or "Safety Data". Step 2: Pick category + follow-up questions + optional description. |
+| **Hazard categories**      | Poor Lighting, Unsafe Area, Obstruction, Harassment, Suspicious Activity, Dead End, Other.             |
+| **Safety data categories** | CCTV Camera, Street Light, Bus Stop, Safe Space/Shop.                                                  |
+| **CCTV detail capture**    | Type (dome/shop/police/residential/traffic), coverage, height, compass direction.                      |
+| **Nearby reports**         | Fetch reports within a radius for proximity-based display.                                             |
 
 ### 💳 Subscription & Monetisation
 
-| Feature | Description |
-|---|---|
-| **Stripe checkout** | Opens browser for payment (mobile via deep link, web via popup). |
-| **Customer portal** | Stripe portal for managing/cancelling existing subscriptions. |
-| **14-day cooling-off refund** | First subscription within 14 days → full refund. After → active until period end. |
-| **Gift subscriptions** | Admin-granted Pro tier with an expiry date for early adopters. |
-| **Family & Friends Pack** | Min. 3 members, £3/user/month (save £1.99 vs individual). Owner manages members, invites, checkout, cancellation. |
-| **Feature gating** | All features checked against subscription limits before execution. Global modal for blocked features. |
-| **Usage tracking** | Events: `app_open`, `route_search`, `navigation_start/complete/abandon`. Aggregated stats available. |
+| Feature                       | Description                                                                                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Stripe checkout**           | Opens browser for payment (mobile via deep link, web via popup).                                                  |
+| **Customer portal**           | Stripe portal for managing/cancelling existing subscriptions.                                                     |
+| **14-day cooling-off refund** | First subscription within 14 days → full refund. After → active until period end.                                 |
+| **Gift subscriptions**        | Admin-granted Pro tier with an expiry date for early adopters.                                                    |
+| **Family & Friends Pack**     | Min. 3 members, £3/user/month (save £1.99 vs individual). Owner manages members, invites, checkout, cancellation. |
+| **Feature gating**            | All features checked against subscription limits before execution. Global modal for blocked features.             |
+| **Usage tracking**            | Events: `app_open`, `route_search`, `navigation_start/complete/abandon`. Aggregated stats available.              |
 
 ### 🔍 Place Search & Saved Places
 
-| Feature | Description |
-|---|---|
-| **Nominatim autocomplete** | Place search with in-process TTL cache via dedicated Geocode microservice. |
-| **Pin-drop routing** | Long-press to set origin/destination directly on the map. |
-| **Saved places** | Local storage for Home, Work, Gym, School + custom labels. Duplicate detection. |
+| Feature                    | Description                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| **Nominatim autocomplete** | Place search with in-process TTL cache via dedicated Geocode microservice.      |
+| **Pin-drop routing**       | Long-press to set origin/destination directly on the map.                       |
+| **Saved places**           | Local storage for Home, Work, Gym, School + custom labels. Duplicate detection. |
 
 ### 📱 Platform & UX
 
-| Feature | Description |
-|---|---|
-| **Cross-platform maps** | Leaflet (via WebView) on Android, `react-native-maps` on iOS, Leaflet on web. |
-| **3-step welcome wizard** | Name + Username → Location Permission → Buddy System intro. |
-| **Animated splash screen** | Custom splash with animated pathfinding visualisation. |
-| **Force update screen** | Full-screen blocker when a mandatory update is required. |
-| **OTA auto-updates** | Checks for Expo Updates on launch + every 30 min. Downloads and reloads automatically. |
-| **Web download prompt** | When a web user tries to start navigation, a modal offers the Android APK download. |
-| **Reviews system** | User ratings + comments (submit, update, delete). Public reviews with average + count summary. |
+| Feature                    | Description                                                                                    |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Cross-platform maps**    | Leaflet (via WebView) on Android, `react-native-maps` on iOS, Leaflet on web.                  |
+| **3-step welcome wizard**  | Name + Username → Location Permission → Buddy System intro.                                    |
+| **Animated splash screen** | Custom splash with animated pathfinding visualisation.                                         |
+| **Force update screen**    | Full-screen blocker when a mandatory update is required.                                       |
+| **OTA auto-updates**       | Checks for Expo Updates on launch + every 30 min. Downloads and reloads automatically.         |
+| **Web download prompt**    | When a web user tries to start navigation, a modal offers the Android APK download.            |
+| **Reviews system**         | User ratings + comments (submit, update, delete). Public reviews with average + count summary. |
 
 ### ⚡ Performance
 
-| Feature | Description |
-|---|---|
-| **Spatial indexing** | Grid-based spatial indices (~100 m cells) for O(1) proximity lookups, replacing brute-force distance checks. |
-| **Coverage maps** | Pre-computed `Float32Array` grids with inverse-distance-squared falloff for lighting and crime density. |
-| **Multi-layer caching** | Route cache (5 min), OSM data cache (30 min), crime data cache (24 h), request coalescing for concurrent identical requests. |
-| **Combined Overpass query** | Consolidates 4 separate queries into 1 — ~70% latency reduction. |
-| **Overpass server rotation** | Rotates between 3 Overpass servers with automatic retry on 429/5xx. |
+| Feature                      | Description                                                                                                                  |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Spatial indexing**         | Grid-based spatial indices (~100 m cells) for O(1) proximity lookups, replacing brute-force distance checks.                 |
+| **Coverage maps**            | Pre-computed `Float32Array` grids with inverse-distance-squared falloff for lighting and crime density.                      |
+| **Multi-layer caching**      | Route cache (5 min), OSM data cache (30 min), crime data cache (24 h), request coalescing for concurrent identical requests. |
+| **Combined Overpass query**  | Consolidates 4 separate queries into 1 — ~70% latency reduction.                                                             |
+| **Overpass server rotation** | Rotates between 3 Overpass servers with automatic retry on 429/5xx.                                                          |
 
 ### 📜 Legal & Compliance
 
-| Feature | Description |
-|---|---|
-| **Privacy Policy** | Full privacy policy page. |
-| **Terms & Conditions** | Full T&C page. |
-| **Refund Policy** | Full refund policy page. |
-| **Account Deletion** | GDPR / Google Play compliant deletion page. |
-| **Background Location Disclosure** | Google Play-compliant prominent disclosure modal. |
-| **Web SEO** | `manifest.json`, `robots.txt`, `sitemap.xml`, OpenGraph metadata. |
+| Feature                            | Description                                                       |
+| ---------------------------------- | ----------------------------------------------------------------- |
+| **Privacy Policy**                 | Full privacy policy page.                                         |
+| **Terms & Conditions**             | Full T&C page.                                                    |
+| **Refund Policy**                  | Full refund policy page.                                          |
+| **Account Deletion**               | GDPR / Google Play compliant deletion page.                       |
+| **Background Location Disclosure** | Google Play-compliant prominent disclosure modal.                 |
+| **Web SEO**                        | `manifest.json`, `robots.txt`, `sitemap.xml`, OpenGraph metadata. |
 
 ---
 
@@ -333,7 +333,7 @@ EXPO_PUBLIC_OS_MAPS_API_KEY=       # Ordnance Survey Maps API key
 EXPO_PUBLIC_OS_MAPS_LAYER=Road_3857
 EXPO_PUBLIC_OS_MAPS_BASE_URL=https://api.os.uk/maps/raster/v1/zxy
 EXPO_PUBLIC_OSM_BASE_URL=https://nominatim.openstreetmap.org
-EXPO_PUBLIC_OSM_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
+EXPO_PUBLIC_OSM_TILE_URL=https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}
 EXPO_PUBLIC_OSRM_BASE_URL=https://router.project-osrm.org
 EXPO_PUBLIC_OVERPASS_API_URL=https://overpass-api.de/api/interpreter
 EXPO_PUBLIC_POLICE_API_URL=https://data.police.uk/api
@@ -550,6 +550,7 @@ Grid-based spatial indices (~100 m cells) provide **O(1) proximity lookups** for
 ### Coverage Maps
 
 Pre-computed `Float32Array` grids (~25 m cells) for:
+
 - **Lighting** — inverse-distance-squared falloff from each street lamp (60 m effective radius), with lamp quality multipliers (LED = 1.4×, mercury/gas = 0.7×)
 - **Crime density** — severity-weighted with distance decay: $\text{impact} = \frac{\text{severity}}{1 + (d/30)^{1.5}}$
 
@@ -563,14 +564,14 @@ $$\text{safetyScore} = \sum_{i} w_i \times \text{factor}_i - \text{surfacePenalt
 
 **Time-adaptive weights** shift based on hour of day:
 
-| Factor | Late Night (0–5 am) | Evening (6 pm–midnight) | Daytime |
-|---|---|---|---|
-| Road Type | 0.22 | 0.23 | 0.25 |
-| Lighting | **0.28** | 0.25 | 0.15 |
-| Crime | **0.25** | 0.22 | 0.20 |
-| CCTV | 0.08 | 0.07 | 0.05 |
-| Open Places | 0.07 | 0.12 | 0.15 |
-| Foot Traffic | 0.10 | 0.11 | 0.20 |
+| Factor       | Late Night (0–5 am) | Evening (6 pm–midnight) | Daytime |
+| ------------ | ------------------- | ----------------------- | ------- |
+| Road Type    | 0.22                | 0.23                    | 0.25    |
+| Lighting     | **0.28**            | 0.25                    | 0.15    |
+| Crime        | **0.25**            | 0.22                    | 0.20    |
+| CCTV         | 0.08                | 0.07                    | 0.05    |
+| Open Places  | 0.07                | 0.12                    | 0.15    |
+| Foot Traffic | 0.10                | 0.11                    | 0.20    |
 
 ### Crime Severity Weighting
 
@@ -582,14 +583,14 @@ Each route is split into ~50 m segments. Every segment is scored on a **0–1 ri
 
 $$\text{risk}_{\text{segment}} = w_{\text{crime}} \times \text{crimeRisk} + w_{\text{light}} \times \text{lightingRisk} + w_{\text{road}} \times \text{roadRisk} + w_{\text{activity}} \times \text{activityRisk}$$
 
-| Factor | Weight | Source | Description |
-|---|---|---|---|
-| **Crime** | 30 % | UK Police API | Recent crime incidents within ~50 m, severity-weighted |
-| **Lighting** | 22 % | Overpass API | Street lamp density, lamp quality, `lit` tags, time-of-day |
-| **Road type** | 15 % | Overpass API | Main roads score safer than footpaths/alleys |
-| **Activity** | 13 % | Overpass API | Open shops and cafés nearby (reduces risk) |
-| **Bus stops** | 10 % | Overpass API | Transit proximity |
-| **Road lit fraction** | 10 % | Overpass API | Fraction of road tagged as lit |
+| Factor                | Weight | Source        | Description                                                |
+| --------------------- | ------ | ------------- | ---------------------------------------------------------- |
+| **Crime**             | 30 %   | UK Police API | Recent crime incidents within ~50 m, severity-weighted     |
+| **Lighting**          | 22 %   | Overpass API  | Street lamp density, lamp quality, `lit` tags, time-of-day |
+| **Road type**         | 15 %   | Overpass API  | Main roads score safer than footpaths/alleys               |
+| **Activity**          | 13 %   | Overpass API  | Open shops and cafés nearby (reduces risk)                 |
+| **Bus stops**         | 10 %   | Overpass API  | Transit proximity                                          |
+| **Road lit fraction** | 10 %   | Overpass API  | Fraction of road tagged as lit                             |
 
 ### Route Aggregation
 
@@ -599,11 +600,11 @@ $$\text{Safety Score} = (1 - \text{risk}_{\text{route}}) \times 100$$
 
 ### Colour Coding
 
-| Colour | Risk Range | Label |
-|---|---|---|
-| 🟢 Green | < 0.3 | Safer |
-| 🟡 Yellow | 0.3 – 0.6 | Caution |
-| 🔴 Red | > 0.6 | Higher risk |
+| Colour    | Risk Range | Label       |
+| --------- | ---------- | ----------- |
+| 🟢 Green  | < 0.3      | Safer       |
+| 🟡 Yellow | 0.3 – 0.6  | Caution     |
+| 🔴 Red    | > 0.6      | Higher risk |
 
 ---
 
@@ -619,48 +620,48 @@ $$\text{Safety Score} = (1 - \text{risk}_{\text{route}}) \times 100$$
 
 ## ⚡ Performance Optimisations
 
-| Technique | Description |
-|---|---|
-| **Multi-layer caching** | Route cache (5 min TTL), OSM data cache (30 min), crime data cache (24 h), frontend in-memory caches |
-| **Request coalescing** | Concurrent identical safe-route requests share a single computation via in-flight promise maps |
-| **Combined Overpass query** | Consolidates 4 separate queries (roads, lights, places, transit) into 1 — ~70% latency reduction |
-| **Overpass server rotation** | Rotates between 3 Overpass servers with automatic retry on 429/5xx |
-| **Fast distance approximation** | Equirectangular approximation (5× faster than Haversine) for <5 km proximity checks |
-| **Rate limiting** | Express: 100 req/15 min/IP; Overpass queue; Nominatim 300 ms throttle |
-| **Spatial indexing** | Grid-based O(1) lookups instead of O(n×m) brute-force |
+| Technique                       | Description                                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Multi-layer caching**         | Route cache (5 min TTL), OSM data cache (30 min), crime data cache (24 h), frontend in-memory caches |
+| **Request coalescing**          | Concurrent identical safe-route requests share a single computation via in-flight promise maps       |
+| **Combined Overpass query**     | Consolidates 4 separate queries (roads, lights, places, transit) into 1 — ~70% latency reduction     |
+| **Overpass server rotation**    | Rotates between 3 Overpass servers with automatic retry on 429/5xx                                   |
+| **Fast distance approximation** | Equirectangular approximation (5× faster than Haversine) for <5 km proximity checks                  |
+| **Rate limiting**               | Express: 100 req/15 min/IP; Overpass queue; Nominatim 300 ms throttle                                |
+| **Spatial indexing**            | Grid-based O(1) lookups instead of O(n×m) brute-force                                                |
 
 ---
 
 ## 🔌 External APIs & Data Sources
 
-| Service | Purpose | Auth |
-|---|---|---|
-| [Overpass API](https://overpass-api.de/) | OSM road network, street lights, CCTV, transit stops, open businesses | None |
-| [UK Police API](https://data.police.uk/docs/) | Street-level crime data for England & Wales | None |
-| [OSRM](https://project-osrm.org/) | Pedestrian walking directions (fallback + alternatives) | None |
-| [Nominatim](https://nominatim.openstreetmap.org/) | Place search, autocomplete, reverse geocoding | User-Agent |
-| [OpenAI API](https://platform.openai.com/) | GPT-4o-mini for natural-language safety explanations | API key (server-side) |
-| [OpenStreetMap Tiles](https://tile.openstreetmap.org/) | Raster map tiles | None |
-| [Supabase](https://supabase.com/) | Postgres database + Auth (magic link OTP) | Service role key |
-| [Stripe](https://stripe.com/) | Payment processing, subscription billing, customer portal | Secret key + webhook |
-| [Resend](https://resend.com/) | Transactional email (family pack invites) | API key |
-| [Expo Push Notifications](https://docs.expo.dev/push-notifications/) | Push notification delivery to mobile devices | None (Expo project) |
+| Service                                                              | Purpose                                                               | Auth                  |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------- |
+| [Overpass API](https://overpass-api.de/)                             | OSM road network, street lights, CCTV, transit stops, open businesses | None                  |
+| [UK Police API](https://data.police.uk/docs/)                        | Street-level crime data for England & Wales                           | None                  |
+| [OSRM](https://project-osrm.org/)                                    | Pedestrian walking directions (fallback + alternatives)               | None                  |
+| [Nominatim](https://nominatim.openstreetmap.org/)                    | Place search, autocomplete, reverse geocoding                         | User-Agent            |
+| [OpenAI API](https://platform.openai.com/)                           | GPT-4o-mini for natural-language safety explanations                  | API key (server-side) |
+| [OpenStreetMap Tiles](https://tile.openstreetmap.org/)               | Raster map tiles                                                      | None                  |
+| [Supabase](https://supabase.com/)                                    | Postgres database + Auth (magic link OTP)                             | Service role key      |
+| [Stripe](https://stripe.com/)                                        | Payment processing, subscription billing, customer portal             | Secret key + webhook  |
+| [Resend](https://resend.com/)                                        | Transactional email (family pack invites)                             | API key               |
+| [Expo Push Notifications](https://docs.expo.dev/push-notifications/) | Push notification delivery to mobile devices                          | None (Expo project)   |
 
 ---
 
 ## 💰 Subscription Tiers
 
-| | **Free** | **Guarded** (£4.99/mo) | **Family Pack** (£3/user/mo) |
-|---|---|---|---|
-| Route searches | Limited | Unlimited | Unlimited |
-| Route distance | 1 km max | ~6 miles (~9.6 km) | ~6 miles (~9.6 km) |
-| Navigation sessions | Limited | Unlimited | Unlimited |
-| Emergency contacts | Limited | 5 | 5 |
-| AI explanations | Limited | 10/day | 10/day |
-| Live location sharing | Limited | Unlimited | Unlimited |
-| **Minimum members** | — | — | 3 (including owner) |
-| **Savings vs individual** | — | — | £1.99/person |
-| **14-day refund** | — | ✅ | ✅ |
+|                           | **Free** | **Guarded** (£4.99/mo) | **Family Pack** (£3/user/mo) |
+| ------------------------- | -------- | ---------------------- | ---------------------------- |
+| Route searches            | Limited  | Unlimited              | Unlimited                    |
+| Route distance            | 1 km max | ~6 miles (~9.6 km)     | ~6 miles (~9.6 km)           |
+| Navigation sessions       | Limited  | Unlimited              | Unlimited                    |
+| Emergency contacts        | Limited  | 5                      | 5                            |
+| AI explanations           | Limited  | 10/day                 | 10/day                       |
+| Live location sharing     | Limited  | Unlimited              | Unlimited                    |
+| **Minimum members**       | —        | —                      | 3 (including owner)          |
+| **Savings vs individual** | —        | —                      | £1.99/person                 |
+| **14-day refund**         | —        | ✅                     | ✅                           |
 
 ---
 
@@ -668,13 +669,13 @@ $$\text{Safety Score} = (1 - \text{risk}_{\text{route}}) \times 100$$
 
 ### Backend → Render.com (5-service split)
 
-| Service | Port | Entry point | Purpose |
-|---|---|---|---|
-| **API Gateway** | 3001 | `src/gateway/server.js` | Lightweight I/O proxy (directions, nearby, AI, static maps, integrity) |
-| **Safety Service** | 3002 | `src/safety/server.js` | CPU-heavy A\* pathfinding + safety scoring |
-| **User Data** | 3003 | `src/user/server.js` | Auth, profiles, contacts, live tracking, reports, reviews, usage, family |
-| **Subscription** | 3004 | `src/subscription/server.js` | Stripe checkout, portal, webhook, billing |
-| **Geocode** | 3005 | `src/geocode/server.js` | Nominatim place search + reverse geocoding with TTL cache |
+| Service            | Port | Entry point                  | Purpose                                                                  |
+| ------------------ | ---- | ---------------------------- | ------------------------------------------------------------------------ |
+| **API Gateway**    | 3001 | `src/gateway/server.js`      | Lightweight I/O proxy (directions, nearby, AI, static maps, integrity)   |
+| **Safety Service** | 3002 | `src/safety/server.js`       | CPU-heavy A\* pathfinding + safety scoring                               |
+| **User Data**      | 3003 | `src/user/server.js`         | Auth, profiles, contacts, live tracking, reports, reviews, usage, family |
+| **Subscription**   | 3004 | `src/subscription/server.js` | Stripe checkout, portal, webhook, billing                                |
+| **Geocode**        | 3005 | `src/geocode/server.js`      | Nominatim place search + reverse geocoding with TTL cache                |
 
 - **Region**: `eu-west` (close to UK users)
 - **Plan**: Free tier (512 MB RAM, 0.1 CPU each)
@@ -692,12 +693,14 @@ $$\text{Safety Score} = (1 - \text{risk}_{\text{route}}) \times 100$$
 ### Native Builds & Distribution
 
 **Android (Google Play + GitHub Releases):**
+
 - **Google Play**: Production builds via EAS Build (`eas build --platform android --profile production`) generate an `.aab` (app bundle) for Play Store submission via `eas submit`
 - **GitHub Releases**: A GitHub Actions workflow (`.github/workflows/build-android.yml`) builds a release APK on every push to `main` and uploads it to GitHub Releases
 - **OTA Updates**: Expo Updates (runtime version `1.0.2`) — checks on launch + every 30 min, auto-downloads and reloads
 - Download link: https://github.com/Jrtowers-prog/PlymHack2026New/releases/download/latest/SafeNightHome.apk
 
 **iOS (not yet available):**
+
 - A workflow exists (`.github/workflows/build-ios.yml`) but is **manual trigger only**
 - Requires an Apple Developer account ($99/yr) and signing secrets (`IOS_CERTIFICATE_P12`, `IOS_CERTIFICATE_PASSWORD`, `IOS_PROVISIONING_PROFILE`, `APPLE_TEAM_ID`)
 - iOS apps cannot be sideloaded like Android APKs — Apple requires code signing for all installs
@@ -713,34 +716,39 @@ npx expo run:ios        # iOS (macOS only, requires Xcode)
 
 ## 📜 Available Scripts
 
-| Command | Description |
-|---|---|
-| `npm start` | Start the Expo development server |
-| `npm run web` | Start Expo for web |
-| `npm run android` | Build and run on Android |
-| `npm run ios` | Build and run on iOS |
-| `npm run lint` | Run ESLint |
-| `npm run build:web` | Export web build for deployment |
-| `npm run build:android` | EAS production build for Android (app bundle) |
-| `npm run build:android:local` | EAS production build locally |
-| `npm run submit:android` | Submit to Google Play via EAS |
-| `npm run update` | Push OTA update to production branch |
+| Command                       | Description                                   |
+| ----------------------------- | --------------------------------------------- |
+| `npm start`                   | Start the Expo development server             |
+| `npm run web`                 | Start Expo for web                            |
+| `npm run android`             | Build and run on Android                      |
+| `npm run ios`                 | Build and run on iOS                          |
+| `npm run lint`                | Run ESLint                                    |
+| `npm run build:web`           | Export web build for deployment               |
+| `npm run build:android`       | EAS production build for Android (app bundle) |
+| `npm run build:android:local` | EAS production build locally                  |
+| `npm run submit:android`      | Submit to Google Play via EAS                 |
+| `npm run update`              | Push OTA update to production branch          |
+
+Android versioning source of truth: `android/version.properties`
+
+- `VERSION_CODE` is auto-incremented by `npm run build:android` and `npm run build:android:local` before each EAS build.
+- `VERSION_NAME` is used as the app semantic version in Expo config.
 
 ### Backend
 
-| Command | Description |
-|---|---|
-| `npm run dev` | Start all 5 services concurrently (with --watch) |
-| `npm run start:gateway` | Start API Gateway service |
-| `npm run start:safety` | Start Safety Compute service |
-| `npm run start:user` | Start User Data service |
-| `npm run start:subscription` | Start Subscription service |
-| `npm run start:geocode` | Start Geocode service |
-| `npm run dev:gateway` | Gateway with `--watch` (auto-restart) |
-| `npm run dev:safety` | Safety with `--watch` (auto-restart) |
-| `npm run dev:user` | User with `--watch` (auto-restart) |
-| `npm run dev:subscription` | Subscription with `--watch` (auto-restart) |
-| `npm run dev:geocode` | Geocode with `--watch` (auto-restart) |
+| Command                      | Description                                      |
+| ---------------------------- | ------------------------------------------------ |
+| `npm run dev`                | Start all 5 services concurrently (with --watch) |
+| `npm run start:gateway`      | Start API Gateway service                        |
+| `npm run start:safety`       | Start Safety Compute service                     |
+| `npm run start:user`         | Start User Data service                          |
+| `npm run start:subscription` | Start Subscription service                       |
+| `npm run start:geocode`      | Start Geocode service                            |
+| `npm run dev:gateway`        | Gateway with `--watch` (auto-restart)            |
+| `npm run dev:safety`         | Safety with `--watch` (auto-restart)             |
+| `npm run dev:user`           | User with `--watch` (auto-restart)               |
+| `npm run dev:subscription`   | Subscription with `--watch` (auto-restart)       |
+| `npm run dev:geocode`        | Geocode with `--watch` (auto-restart)            |
 
 ---
 
@@ -748,46 +756,46 @@ npx expo run:ios        # iOS (macOS only, requires Xcode)
 
 For the build workflows to work, add these secrets in **Settings → Secrets → Actions**:
 
-| Secret | Required for | Description |
-|---|---|---|
-| `EXPO_PUBLIC_API_BASE_URL` | Android + iOS | Backend gateway URL |
-| `EXPO_PUBLIC_SAFETY_API_URL` | Android + iOS | Safety service URL |
-| `EXPO_PUBLIC_USER_API_URL` | Android + iOS | User data service URL |
-| `EXPO_PUBLIC_SUBSCRIPTION_API_URL` | Android + iOS | Subscription service URL |
-| `EXPO_PUBLIC_GEOCODE_API_URL` | Android + iOS | Geocode service URL |
-| `EXPO_PUBLIC_OSM_USER_AGENT` | Android + iOS | User-agent string for Nominatim requests |
-| `EXPO_PUBLIC_OSM_EMAIL` | Android + iOS | Contact email for Nominatim |
-| `IOS_CERTIFICATE_P12` | iOS only | Base64-encoded .p12 distribution certificate |
-| `IOS_CERTIFICATE_PASSWORD` | iOS only | Password for the .p12 |
-| `IOS_PROVISIONING_PROFILE` | iOS only | Base64-encoded .mobileprovision (Ad Hoc) |
-| `APPLE_TEAM_ID` | iOS only | 10-character Apple Developer Team ID |
+| Secret                             | Required for  | Description                                  |
+| ---------------------------------- | ------------- | -------------------------------------------- |
+| `EXPO_PUBLIC_API_BASE_URL`         | Android + iOS | Backend gateway URL                          |
+| `EXPO_PUBLIC_SAFETY_API_URL`       | Android + iOS | Safety service URL                           |
+| `EXPO_PUBLIC_USER_API_URL`         | Android + iOS | User data service URL                        |
+| `EXPO_PUBLIC_SUBSCRIPTION_API_URL` | Android + iOS | Subscription service URL                     |
+| `EXPO_PUBLIC_GEOCODE_API_URL`      | Android + iOS | Geocode service URL                          |
+| `EXPO_PUBLIC_OSM_USER_AGENT`       | Android + iOS | User-agent string for Nominatim requests     |
+| `EXPO_PUBLIC_OSM_EMAIL`            | Android + iOS | Contact email for Nominatim                  |
+| `IOS_CERTIFICATE_P12`              | iOS only      | Base64-encoded .p12 distribution certificate |
+| `IOS_CERTIFICATE_PASSWORD`         | iOS only      | Password for the .p12                        |
+| `IOS_PROVISIONING_PROFILE`         | iOS only      | Base64-encoded .mobileprovision (Ad Hoc)     |
+| `APPLE_TEAM_ID`                    | iOS only      | 10-character Apple Developer Team ID         |
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Layer | Technology |
-|---|---|
-| **Frontend** | React Native 0.81, Expo SDK 54, TypeScript 5.9 |
-| **Routing** | Expo Router 6 (file-based) |
-| **Maps (iOS)** | `react-native-maps` (Apple MapKit) |
-| **Maps (Android/Web)** | Leaflet via `react-native-webview` |
-| **Animations** | `react-native-reanimated` 4.1 |
-| **Gestures** | `react-native-gesture-handler` 2.28 |
-| **Location** | `expo-location` (foreground + background) |
-| **Camera** | `expo-camera` (QR code scanning) |
-| **Push Notifications** | `expo-notifications` |
-| **OTA Updates** | `expo-updates` |
-| **Haptics** | `expo-haptics` |
-| **Storage** | `@react-native-async-storage/async-storage` |
-| **QR Codes** | `react-native-qrcode-svg` |
-| **Backend** | Express 4.21 (Node.js), 5 microservices |
-| **Database** | Supabase (Postgres + Auth) |
-| **Payments** | Stripe (checkout, portal, webhooks) |
-| **Email** | Resend (transactional) |
-| **Security** | Helmet, CORS, express-rate-limit, JWT, input validation |
-| **AI** | OpenAI GPT-4o-mini |
-| **Deployment** | Render.com (backend), Netlify (web), EAS Build (native), GitHub Actions (CI/CD) |
+| Layer                  | Technology                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| **Frontend**           | React Native 0.81, Expo SDK 54, TypeScript 5.9                                  |
+| **Routing**            | Expo Router 6 (file-based)                                                      |
+| **Maps (iOS)**         | `react-native-maps` (Apple MapKit)                                              |
+| **Maps (Android/Web)** | Leaflet via `react-native-webview`                                              |
+| **Animations**         | `react-native-reanimated` 4.1                                                   |
+| **Gestures**           | `react-native-gesture-handler` 2.28                                             |
+| **Location**           | `expo-location` (foreground + background)                                       |
+| **Camera**             | `expo-camera` (QR code scanning)                                                |
+| **Push Notifications** | `expo-notifications`                                                            |
+| **OTA Updates**        | `expo-updates`                                                                  |
+| **Haptics**            | `expo-haptics`                                                                  |
+| **Storage**            | `@react-native-async-storage/async-storage`                                     |
+| **QR Codes**           | `react-native-qrcode-svg`                                                       |
+| **Backend**            | Express 4.21 (Node.js), 5 microservices                                         |
+| **Database**           | Supabase (Postgres + Auth)                                                      |
+| **Payments**           | Stripe (checkout, portal, webhooks)                                             |
+| **Email**              | Resend (transactional)                                                          |
+| **Security**           | Helmet, CORS, express-rate-limit, JWT, input validation                         |
+| **AI**                 | OpenAI GPT-4o-mini                                                              |
+| **Deployment**         | Render.com (backend), Netlify (web), EAS Build (native), GitHub Actions (CI/CD) |
 
 ---
 
