@@ -20,7 +20,9 @@ import {
 
 import type { UseAutoPlaceSearchReturn } from "@/src/hooks/useAutoPlaceSearch";
 import type { SavedPlace, SaveResult } from "@/src/hooks/useSavedPlaces";
+import type { SafetyLevel } from "@/src/services/safeRoutes";
 import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/google";
+import { SafetyLevelToggle } from "./SafetyLevelToggle";
 import { SavedPlaces } from "./SavedPlaces";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -64,6 +66,9 @@ export interface SearchBarProps {
   ) => Promise<SaveResult> | SaveResult;
   onRemoveSavedPlace?: (id: string) => void;
   onSavedPlaceToast?: (msg: string, icon?: string) => void;
+  /** Safety data level for route search (Extra = default) */
+  safetyLevel?: SafetyLevel;
+  onSafetyLevelChange?: (level: SafetyLevel) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -91,6 +96,8 @@ export function SearchBar({
   onSavePlace,
   onRemoveSavedPlace,
   onSavedPlaceToast,
+  safetyLevel = 'extra',
+  onSafetyLevelChange,
 }: SearchBarProps) {
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
@@ -338,6 +345,14 @@ export function SearchBar({
               <View style={styles.iconConnector} />
             </View>
             <View style={styles.inputDivider} />
+            {onSafetyLevelChange && (
+              <View style={styles.magicSlot}>
+                <SafetyLevelToggle
+                  value={safetyLevel}
+                  onChange={onSafetyLevelChange}
+                />
+              </View>
+            )}
           </View>
 
           {/* Destination Input */}
@@ -672,6 +687,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: Platform.OS === "web" ? 10 : 8,
     marginVertical: Platform.OS === "web" ? 0 : 2,
+  },
+  magicSlot: {
+    marginLeft: 'auto',
+    paddingLeft: 8,
   },
   swapButton: {
     width: 22,
