@@ -25,7 +25,9 @@ import {
 
 import type { UseAutoPlaceSearchReturn } from "@/src/hooks/useAutoPlaceSearch";
 import type { SavedPlace, SaveResult } from "@/src/hooks/useSavedPlaces";
+import type { SafetyLevel } from "@/src/services/safeRoutes";
 import type { LatLng, PlaceDetails, PlacePrediction } from "@/src/types/google";
+import { SafetyLevelToggle } from "./SafetyLevelToggle";
 import { SavedPlaces } from "./SavedPlaces";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -58,6 +60,9 @@ export interface MobileWebSearchBarProps {
   ) => Promise<SaveResult> | SaveResult;
   onRemoveSavedPlace?: (id: string) => void;
   onSavedPlaceToast?: (msg: string, icon?: string) => void;
+  /** Safety data level for route search (Extra = default) */
+  safetyLevel?: SafetyLevel;
+  onSafetyLevelChange?: (level: SafetyLevel) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -85,6 +90,8 @@ export function MobileWebSearchBar({
   onSavePlace,
   onRemoveSavedPlace,
   onSavedPlaceToast,
+  safetyLevel = 'extra',
+  onSafetyLevelChange,
 }: MobileWebSearchBarProps) {
   const [expanded, setExpanded] = useState(false);
   const expandAnim = useRef(new Animated.Value(0)).current;
@@ -330,6 +337,11 @@ export function MobileWebSearchBar({
               >
                 <Ionicons name="swap-vertical" size={18} color="#667085" />
               </Pressable>
+              {onSafetyLevelChange && (
+                <View style={styles.magicSlot}>
+                  <SafetyLevelToggle value={safetyLevel} onChange={onSafetyLevelChange} />
+                </View>
+              )}
             </View>
 
             {/* Origin */}
@@ -735,6 +747,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#f3f4f6",
     alignItems: "center",
     justifyContent: "center",
+  },
+  magicSlot: {
+    marginLeft: 8,
   },
 
   // ── Input rows ──
